@@ -39,11 +39,11 @@
       "retry_requested_at": "2026-11-23T12:19:07.171891+00:00"
     },
     "45172724043": {
-      "attempt": 2,
+      "attempt": 3,
       "status": "retry_requested",
-      "conclusion": "failure",
-      "retry_requested_attempt": 2,
-      "retry_requested_at": "2026-11-23T12:19:07.171891+00:00"
+      "conclusion": "cancelled",
+      "retry_requested_attempt": 3,
+      "retry_requested_at": "2026-11-23T12:22:21.349398+00:00"
     },
     "45172720710": {
       "attempt": 2,
