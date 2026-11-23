@@ -121,18 +121,37 @@ def _list_runs(query):
     return runs
 
 
+def _list_status_runs(status, start_date, end_date):
+    query = f"status={status}&created={start_date.isoformat()}..{end_date.isoformat()}"
+    batch = _list_runs(query)
+    # GitHub caps each filtered search at 1,000 results. Split the date range
+    # recursively so old failures cannot disappear behind that cap.
+    if len(batch) < 1000 or start_date >= end_date:
+        return batch
+    midpoint = start_date + (end_date - start_date) // 2
+    return (
+        _list_status_runs(status, start_date, midpoint)
+        + _list_status_runs(status, midpoint + timedelta(days=1), end_date)
+    )
+
+
 def get_runs(now):
     """Fetch recent scans, every active scan, and all non-success conclusions."""
     merged = {}
     cutoff = now - timedelta(seconds=RECENT_SECONDS)
-    queries = [f"created=%3E{cutoff.strftime('%Y-%m-%d')}"]
-    queries.extend(f"status={status}" for status in (
+    recent_query = f"created=%3E{cutoff.strftime('%Y-%m-%d')}"
+    for run in _list_runs(recent_query):
+        merged[str(run["id"])] = run
+
+    start_date = datetime(2008, 1, 1).date()
+    end_date = now.date()
+    statuses = (
         "queued", "in_progress", "waiting", "pending", "requested",
         "failure", "cancelled", "timed_out", "action_required",
         "stale", "neutral", "skipped",
-    ))
-    for query in queries:
-        for run in _list_runs(query):
+    )
+    for status in statuses:
+        for run in _list_status_runs(status, start_date, end_date):
             merged[str(run["id"])] = run
     return list(merged.values())
 
