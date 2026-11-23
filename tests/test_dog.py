@@ -57,6 +57,9 @@ class DogMonitorTests(unittest.TestCase):
     def test_successful_run_is_not_retried(self):
         self.assertIsNone(dog.monitor_run(self.make_run("completed",400,"success"),self.state,self.now))
 
+    def test_only_current_bark_workflow_is_monitored(self):
+        self.assertEqual(dog.WORKFLOWS, (dog.WORKFLOW,))
+
     def test_manual_and_scheduled_scans_are_monitored(self):
         self.assertTrue(dog.is_scan_run({"event":"workflow_dispatch"}))
         self.assertTrue(dog.is_scan_run({"event":"schedule"}))
