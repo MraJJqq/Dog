@@ -119,6 +119,9 @@ class DogMonitorTests(unittest.TestCase):
 
     def test_active_scan_blocks_failed_run_retries(self):
         active=self.make_run("in_progress",30)
+        current=datetime.now(UTC)
+        active["run_started_at"]=stamp(current-timedelta(seconds=30))
+        active["created_at"]=stamp(current-timedelta(seconds=30))
         failed=self.make_run("completed",20,"failure")
         failed["id"]=456
         with patch.object(dog,"load_state",return_value=(self.state,"sha")), \
