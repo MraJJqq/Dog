@@ -169,10 +169,24 @@ def is_scan_run(run):
 
 
 def dispatch_recovery(task_id):
+    slot = task_id.rsplit(":", 1)[-1]
+    schedule_keys = {
+        "08:02": "2 0 * * *",
+        "10:02": "2 2 * * *",
+        "16:02": "2 8 * * *",
+        "20:02": "2 12 * * *",
+        "22:02": "2 14 * * *",
+    }
+    schedule_key = schedule_keys.get(slot)
+    if not schedule_key:
+        raise RuntimeError(f"Unknown scheduled slot in recovery task: {task_id}")
     api(
         "POST",
         f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/dispatches",
-        {"ref": BRANCH, "inputs": {"manual": False, "task_id": task_id, "source": "scheduled"}},
+        {"ref": BRANCH, "inputs": {
+            "manual": False, "task_id": task_id,
+            "source": "scheduled", "schedule_key": schedule_key,
+        }},
     )
     print(f"Recovery scan dispatched: {task_id}")
 
