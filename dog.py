@@ -26,7 +26,7 @@ RECENT_SECONDS = 48 * 3600
 STATE_CONTENT = None
 
 
-def api(method, path, payload=None):
+def api(method, path, payload=None, *, allow_404=False):
     if not TOKEN:
         raise RuntimeError("Missing DOG_GITHUB_TOKEN")
     data = None if payload is None else json.dumps(payload).encode()
@@ -46,7 +46,7 @@ def api(method, path, payload=None):
             return response.status, json.loads(raw.decode()) if raw else {}
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode(errors="replace")
-        if exc.code == 404:
+        if exc.code == 404 and allow_404:
             return 404, {}
         raise RuntimeError(f"GitHub API {exc.code}: {raw[:500]}") from exc
 
@@ -88,7 +88,7 @@ def normalize_state(raw):
 
 def load_state():
     global STATE_CONTENT
-    status, body = api("GET", f"/repos/{OWNER}/{DOG_REPO}/contents/state.json?ref={BRANCH}")
+    status, body = api("GET", f"/repos/{OWNER}/{DOG_REPO}/contents/state.json?ref={BRANCH}", allow_404=True)
     if status == 404:
         STATE_CONTENT = None
         return normalize_state({}), None
