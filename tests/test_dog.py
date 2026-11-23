@@ -60,6 +60,16 @@ class DogMonitorTests(unittest.TestCase):
         task=dog._task_id(slot)
         self.assertTrue(dog._run_matches_slot({"event":"workflow_dispatch","display_title":f"Vegasbark {task}"},slot,task))
 
+    def test_native_schedule_runs_map_to_non_overlapping_slots(self):
+        first=datetime(2026,11,23,8,2,tzinfo=ZoneInfo("Asia/Shanghai"))
+        second=datetime(2026,11,23,10,2,tzinfo=ZoneInfo("Asia/Shanghai"))
+        delayed={"event":"schedule","created_at":stamp(first+timedelta(minutes=58))}
+        next_slot={"event":"schedule","created_at":stamp(second+timedelta(seconds=10))}
+        self.assertTrue(dog._run_matches_slot(delayed,first,dog._task_id(first)))
+        self.assertFalse(dog._run_matches_slot(delayed,second,dog._task_id(second)))
+        self.assertTrue(dog._run_matches_slot(next_slot,second,dog._task_id(second)))
+        self.assertFalse(dog._run_matches_slot(next_slot,first,dog._task_id(first)))
+
     def test_legacy_state_migrates_pending_slot(self):
         state=dog.normalize_state({"task_id":"auto:2026-11-23:16:02",
             "slot":"2026-11-23T16:02:00+08:00",
