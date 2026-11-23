@@ -21,6 +21,7 @@ API = "https://api.github.com"
 TOKEN = os.getenv("DOG_GITHUB_TOKEN", "")
 LIMIT_SECONDS = 360
 RECENT_SECONDS = 48 * 3600
+STATE_CONTENT = None
 
 
 def api(method, path, payload=None):
@@ -84,16 +85,22 @@ def normalize_state(raw):
 
 
 def load_state():
+    global STATE_CONTENT
     status, body = api("GET", f"/repos/{OWNER}/{DOG_REPO}/contents/state.json?ref={BRANCH}")
     if status == 404:
+        STATE_CONTENT = None
         return normalize_state({}), None
     content = base64.b64decode(body["content"]).decode()
+    STATE_CONTENT = content
     return normalize_state(json.loads(content)), body["sha"]
 
 
 def save_state(state, sha):
+    global STATE_CONTENT
     state["schema_version"] = 2
     content = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
+    if content == STATE_CONTENT:
+        return
     payload = {
         "message": "Dog: enforce six-minute Bark monitoring and recovery",
         "content": base64.b64encode(content.encode()).decode(),
@@ -102,6 +109,7 @@ def save_state(state, sha):
     if sha:
         payload["sha"] = sha
     api("PUT", f"/repos/{OWNER}/{DOG_REPO}/contents/state.json", payload)
+    STATE_CONTENT = content
 
 
 def _list_runs(query):
@@ -295,7 +303,7 @@ def slot_recovery(runs, state, now):
             record = state["slots"].setdefault(key, {})
             if matching:
                 record.update({"status": "run_found", "task_id": task_id,
-                               "run_id": matching["id"], "last_seen_at": iso_now(now)})
+                               "run_id": matching["id"]})
                 continue
             dispatched_at = record.get("dispatched_at")
             if dispatched_at and (now - parse_time(dispatched_at)).total_seconds() < LIMIT_SECONDS:
