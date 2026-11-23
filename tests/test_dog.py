@@ -47,8 +47,12 @@ class DogMonitorTests(unittest.TestCase):
     def test_running_over_six_minutes_is_cancelled(self):
         self.assertEqual(dog.monitor_run(self.make_run("in_progress",361),self.state,self.now),("cancel",123))
 
-    def test_failed_run_is_retried(self):
-        self.assertEqual(dog.monitor_run(self.make_run("completed",400,"failure"),self.state,self.now),("rerun",123))
+    def test_failed_run_dispatches_replacement_with_same_task_id(self):
+        run=self.make_run("completed",400,"failure")
+        run["display_title"]="Vegasbark auto:2026-11-23:20:02"
+        descriptor=dog._task_descriptor(run)
+        self.assertEqual(dog.monitor_run(run,self.state,self.now,descriptor),
+                         ("dispatch_retry","auto:2026-11-23:20:02","scheduled",False,123))
 
     def test_successful_run_is_not_retried(self):
         self.assertIsNone(dog.monitor_run(self.make_run("completed",400,"success"),self.state,self.now))
@@ -106,30 +110,30 @@ class DogMonitorTests(unittest.TestCase):
             dog.save_state(state,"existing-sha")
         api.assert_not_called()
 
-    def test_only_one_failed_run_is_retried_per_cycle(self):
-        first=self.make_run("completed",20,"failure")
-        second=self.make_run("completed",30,"failure")
-        second["id"]=456
-        with patch.object(dog,"load_state",return_value=(self.state,"sha")), \
-             patch.object(dog,"get_runs",return_value=[first,second]), \
-             patch.object(dog,"slot_recovery",return_value=[]), \
-             patch.object(dog,"save_state"), patch.object(dog,"rerun") as retry:
-            dog.main()
-        retry.assert_called_once()
+    def test_manual_failure_keeps_original_task_id(self):
+        run=self.make_run("completed",400,"failure")
+        run["display_title"]="Vegasbark manual-custom-id"
+        descriptor=dog._task_descriptor(run)
+        self.assertEqual(descriptor,("manual-custom-id","manual",True))
 
-    def test_active_scan_blocks_failed_run_retries(self):
-        active=self.make_run("in_progress",30)
-        current=datetime.now(UTC)
-        active["run_started_at"]=stamp(current-timedelta(seconds=30))
-        active["created_at"]=stamp(current-timedelta(seconds=30))
-        failed=self.make_run("completed",20,"failure")
-        failed["id"]=456
-        with patch.object(dog,"load_state",return_value=(self.state,"sha")), \
-             patch.object(dog,"get_runs",return_value=[active,failed]), \
-             patch.object(dog,"slot_recovery",return_value=[]), \
-             patch.object(dog,"save_state"), patch.object(dog,"rerun") as retry:
-            dog.main()
-        retry.assert_not_called()
+    def test_native_schedule_task_descriptor_matches_slot(self):
+        run={"id":987,"event":"schedule","created_at":"2026-11-23T12:02:15Z"}
+        self.assertEqual(dog._task_descriptor(run),("auto:2026-11-23:20:02","scheduled",False))
+
+    def test_newer_run_with_same_task_id_supersedes_old(self):
+        old=self.make_run("completed",200,"failure")
+        old["display_title"]="Vegasbark auto:2026-11-23:20:02"
+        newer=self.make_run("in_progress",20)
+        newer["id"]=456
+        newer["display_title"]="Vegasbark auto:2026-11-23:20:02"
+        self.assertTrue(dog._has_newer_task_run(old,[old,newer]))
+
+    @patch("dog.api")
+    def test_retry_dispatch_restores_previous_run_cache(self, api_mock):
+        dog.dispatch_task("auto:2026-11-23:20:02","scheduled",False,restore_run_id=123)
+        payload=api_mock.call_args.args[2]["inputs"]
+        self.assertEqual(payload["restore_run_id"],"123")
+        self.assertEqual(payload["schedule_key"],"2 12 * * *")
 
     def test_legacy_state_migrates_pending_slot(self):
         state=dog.normalize_state({"task_id":"auto:2026-11-23:16:02",
