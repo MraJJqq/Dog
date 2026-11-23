@@ -230,7 +230,7 @@ def monitor_run(run, state, now):
 
     if status in ("queued", "waiting", "pending", "requested"):
         if not record.get("queued_since"):
-            queued_at = run.get("created_at") if attempt == 1 else None
+            queued_at = run.get("created_at") if attempt == 1 else run.get("updated_at")
             record["queued_since"] = queued_at or iso_now(now)
         age = (now - parse_time(record["queued_since"])).total_seconds()
         if age >= LIMIT_SECONDS:
@@ -241,11 +241,11 @@ def monitor_run(run, state, now):
 
     if status == "in_progress":
         started_value = run.get("run_started_at")
-        if started_value and attempt == 1:
+        if started_value:
             started = parse_time(started_value)
         else:
             if not record.get("running_since"):
-                record["running_since"] = started_value or iso_now(now)
+                record["running_since"] = started_value or run.get("updated_at") or iso_now(now)
             started = parse_time(record["running_since"])
         age = (now - started).total_seconds()
         if age >= LIMIT_SECONDS:
