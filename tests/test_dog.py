@@ -65,10 +65,10 @@ class DogMonitorTests(unittest.TestCase):
     def test_slot_recovery_waits_six_minutes(self):
         slot=datetime(2026,11,23,8,2,tzinfo=ZoneInfo("Asia/Shanghai"))
         key,task=dog._slot_key(slot),dog._task_id(slot)
-        today_slot=datetime(2026,11,23,8,2,tzinfo=ZoneInfo("Asia/Shanghai"))
+        prior_slot=datetime(2026,11,22,8,2,tzinfo=ZoneInfo("Asia/Shanghai"))
         state={"schema_version":2,"runs":{},"slots":{
             key:{"task_id":task,"dispatched_at":stamp(self.now-timedelta(seconds=359))},
-            dog._slot_key(today_slot):{"task_id":dog._task_id(today_slot),"status":"completed_success"}}}
+            dog._slot_key(prior_slot):{"task_id":dog._task_id(prior_slot),"status":"completed_success"}}}
         with patch.object(dog,"SLOTS",("08:02",)):
             self.assertEqual(dog.slot_recovery([],state,self.now),[])
             state["slots"][key]["dispatched_at"]=stamp(self.now-timedelta(seconds=360))
