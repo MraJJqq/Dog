@@ -126,7 +126,6 @@ def dispatch(task_id, now_iso, state, sha):
             "inputs": {
                 "manual": "false",
                 "task_id": task_id,
-                "retry_stage": "full",
                 "source": "scheduled",
             },
         },
