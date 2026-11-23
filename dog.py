@@ -274,7 +274,7 @@ def _run_matches_slot(run, slot, task_id):
             delta = (parse_time(run["created_at"]) - slot.astimezone(UTC)).total_seconds()
             # Non-overlapping slot window: from two minutes before this slot
             # until two minutes before the next configured slot.
-            return -120 <= delta < interval - 120
+            return 0 <= delta < interval
         except (KeyError, TypeError, ValueError):
             return False
     return False
