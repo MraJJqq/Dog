@@ -116,8 +116,9 @@ class DogMonitorTests(unittest.TestCase):
         descriptor=dog._task_descriptor(run)
         self.assertEqual(descriptor,("manual-custom-id","manual",True))
 
-    def test_native_schedule_task_descriptor_matches_slot(self):
-        run={"id":987,"event":"schedule","created_at":"2026-11-23T12:02:15Z"}
+    def test_native_schedule_task_descriptor_uses_cron_not_delayed_creation_time(self):
+        run={"id":987,"event":"schedule","created_at":"2026-11-23T14:20:15Z",
+             "display_title":"Vegasbark 2 12 * * *"}
         self.assertEqual(dog._task_descriptor(run),("auto:2026-11-23:20:02","scheduled",False))
 
     def test_newer_run_with_same_task_id_supersedes_old(self):

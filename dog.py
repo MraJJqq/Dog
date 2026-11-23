@@ -12,11 +12,14 @@ from zoneinfo import ZoneInfo
 OWNER = "MraJJqq"
 DOG_REPO = "Dog"
 BARK_REPO = "Vegasbark"
-WORKFLOW = "scan.yml"
+WORKFLOW = "bark-scan.yml"
+LEGACY_WORKFLOW = "scan.yml"
+WORKFLOWS = (WORKFLOW, LEGACY_WORKFLOW)
 BRANCH = "main"
 TZ = ZoneInfo("Asia/Shanghai")
 UTC = ZoneInfo("UTC")
 SLOTS = ("08:02", "10:02", "16:02", "20:02", "22:02")
+CRON_TO_SLOT = {"2 0 * * *": "08:02", "2 2 * * *": "10:02", "2 8 * * *": "16:02", "2 12 * * *": "20:02", "2 14 * * *": "22:02"}
 API = "https://api.github.com"
 TOKEN = os.getenv("DOG_GITHUB_TOKEN", "")
 LIMIT_SECONDS = 360
@@ -112,13 +115,13 @@ def save_state(state, sha):
     STATE_CONTENT = content
 
 
-def _list_runs(query):
+def _list_runs(query, workflow=WORKFLOW):
     runs = []
     page = 1
     while True:
         _, body = api(
             "GET",
-            f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/runs?per_page=100&page={page}&{query}",
+            f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{workflow}/runs?per_page=100&page={page}&{query}",
         )
         batch = body.get("workflow_runs", [])
         runs.extend(batch)
@@ -128,38 +131,41 @@ def _list_runs(query):
     return runs
 
 
-def _list_status_runs(status, start_date, end_date):
+def _list_status_runs(status, start_date, end_date, workflow=WORKFLOW):
     query = f"status={status}&created={start_date.isoformat()}..{end_date.isoformat()}"
-    batch = _list_runs(query)
+    batch = _list_runs(query, workflow)
     # GitHub caps each filtered search at 1,000 results. Split the date range
-    # recursively so old failures cannot disappear behind that cap.
+    # recursively so no failed run is hidden behind that cap.
     if len(batch) < 1000 or start_date >= end_date:
         return batch
     midpoint = start_date + (end_date - start_date) // 2
     return (
-        _list_status_runs(status, start_date, midpoint)
-        + _list_status_runs(status, midpoint + timedelta(days=1), end_date)
+        _list_status_runs(status, start_date, midpoint, workflow)
+        + _list_status_runs(status, midpoint + timedelta(days=1), end_date, workflow)
     )
 
 
 def get_runs(now):
-    """Fetch recent scans, every active scan, and all non-success conclusions."""
+    """Fetch recent runs, every active run, and every failed/cancelled scan."""
     merged = {}
     cutoff = now - timedelta(seconds=RECENT_SECONDS)
     recent_query = f"created=%3E{cutoff.strftime('%Y-%m-%d')}"
-    for run in _list_runs(recent_query):
-        merged[str(run["id"])] = run
-
     start_date = datetime(2008, 1, 1).date()
     end_date = now.date()
-    statuses = (
-        "queued", "in_progress", "waiting", "pending", "requested",
-        "failure", "cancelled", "timed_out", "action_required",
-        "stale", "neutral", "skipped",
-    )
-    for status in statuses:
-        for run in _list_status_runs(status, start_date, end_date):
+
+    for workflow in WORKFLOWS:
+        for run in _list_runs(recent_query, workflow):
             merged[str(run["id"])] = run
+
+        # GitHub's run-list status filter accepts workflow statuses, not
+        # conclusion names. Fetch completed runs and retain every non-success.
+        for run in _list_status_runs("completed", start_date, end_date, workflow):
+            if run.get("conclusion") != "success":
+                merged[str(run["id"])] = run
+
+        for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+            for run in _list_status_runs(status, start_date, end_date, workflow):
+                merged[str(run["id"])] = run
     return list(merged.values())
 
 
@@ -199,8 +205,14 @@ def cancel_run(run_id):
     api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run_id}/cancel")
 
 
-def _scheduled_task_id(created_at):
+def _scheduled_task_id(created_at, schedule_cron=None):
     created = parse_time(created_at).astimezone(TZ)
+    if schedule_cron in CRON_TO_SLOT:
+        hour, minute = map(int, CRON_TO_SLOT[schedule_cron].split(":"))
+        slot = datetime(created.year, created.month, created.day, hour, minute, tzinfo=TZ)
+        if slot > created:
+            slot -= timedelta(days=1)
+        return f"auto:{slot:%Y-%m-%d}:{slot:%H:%M}"
     candidates = []
     for offset in (0, 1):
         day = created.date() - timedelta(days=offset)
@@ -218,7 +230,9 @@ def _scheduled_task_id(created_at):
 def _task_descriptor(run):
     event = run.get("event")
     if event == "schedule":
-        task_id = _scheduled_task_id(run.get("created_at", ""))
+        title = run.get("display_title") or run.get("name") or ""
+        schedule_cron = next((cron for cron in CRON_TO_SLOT if cron in title), None)
+        task_id = _scheduled_task_id(run.get("created_at", ""), schedule_cron)
         return (task_id, "scheduled", False) if task_id else None
     if event == "workflow_dispatch":
         title = run.get("display_title") or ""
@@ -337,9 +351,9 @@ def _task_id(slot):
 
 
 def _run_matches_slot(run, slot, task_id):
-    if run.get("event") == "workflow_dispatch":
-        title = " ".join(str(run.get(k) or "") for k in ("display_title", "name"))
-        return task_id in title
+    descriptor = _task_descriptor(run)
+    if descriptor:
+        return descriptor[0] == task_id
     if run.get("event") == "schedule":
         try:
             slot_index = SLOTS.index(slot.strftime("%H:%M"))
