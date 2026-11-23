@@ -122,16 +122,10 @@ def _list_runs(query):
 
 
 def get_runs(now):
-    """Fetch recent terminal runs and every active queued/running scan."""
-    cutoff = now - timedelta(seconds=RECENT_SECONDS)
+    """Fetch every completed scan plus every active queued/running scan."""
     merged = {}
-    # A date filter keeps the completed-run history bounded without truncating
-    # old active runs, which are queried separately below.
-    recent_query = f"created=%3E{cutoff.strftime('%Y-%m-%d')}"
-    for run in _list_runs(recent_query):
-        merged[str(run["id"])] = run
-    for status in ("queued", "in_progress"):
-        for run in _list_runs(f"status={status}"):
+    for query in ("status=completed", "status=queued", "status=in_progress"):
+        for run in _list_runs(query):
             merged[str(run["id"])] = run
     return list(merged.values())
 
@@ -282,7 +276,7 @@ def prune_state(state, runs, now):
     keep_run_ids = set()
     for run in runs:
         try:
-            if run.get("status") != "completed" or parse_time(run["created_at"]) >= cutoff:
+            if run.get("status") != "completed" or run.get("conclusion") != "success" or parse_time(run["created_at"]) >= cutoff:
                 keep_run_ids.add(str(run["id"]))
         except (KeyError, TypeError, ValueError):
             keep_run_ids.add(str(run.get("id")))
@@ -305,7 +299,7 @@ def main():
     runs = [run for run in get_runs(now) if is_scan_run(run)]
     pending_actions = []
     for run in runs:
-        if run.get("status") != "completed" or parse_time(run["created_at"]) >= now - timedelta(seconds=RECENT_SECONDS):
+        if run.get("status") != "completed" or run.get("conclusion") != "success" or parse_time(run["created_at"]) >= now - timedelta(seconds=RECENT_SECONDS):
             action = monitor_run(run, state, now)
             if action:
                 pending_actions.append(action)
