@@ -57,19 +57,27 @@
     },
     "45177483861": {
       "attempt": 1,
-      "status": "running"
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:47:16Z"
     },
     "45177477754": {
       "attempt": 1,
-      "status": "running"
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:47:15Z"
     },
     "45177473288": {
       "attempt": 1,
-      "status": "running"
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:47:17Z"
     },
     "45177469255": {
       "attempt": 1,
-      "status": "running"
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:47:09Z"
     }
   },
   "slots": {
@@ -105,25 +113,25 @@
     },
     "2026-11-22 08:02": {
       "task_id": "auto:2026-11-22:08:02",
-      "status": "run_found",
+      "status": "completed_success",
       "dispatched_at": "2026-11-23T12:46:16.064295+00:00",
       "run_id": 45177469255
     },
     "2026-11-22 10:02": {
       "task_id": "auto:2026-11-22:10:02",
-      "status": "run_found",
+      "status": "completed_success",
       "dispatched_at": "2026-11-23T12:46:16.064295+00:00",
       "run_id": 45177473288
     },
     "2026-11-22 16:02": {
       "task_id": "auto:2026-11-22:16:02",
-      "status": "run_found",
+      "status": "completed_success",
       "dispatched_at": "2026-11-23T12:46:16.064295+00:00",
       "run_id": 45177477754
     },
     "2026-11-22 20:02": {
       "task_id": "auto:2026-11-22:20:02",
-      "status": "run_found",
+      "status": "completed_success",
       "dispatched_at": "2026-11-23T12:46:16.064295+00:00",
       "run_id": 45177483861
     }
