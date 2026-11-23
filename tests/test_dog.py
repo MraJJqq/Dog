@@ -135,6 +135,21 @@ class DogMonitorTests(unittest.TestCase):
         self.assertEqual(payload["restore_run_id"],"123")
         self.assertEqual(payload["schedule_key"],"2 12 * * *")
 
+    def test_newer_successful_replacement_supersedes_old_failure(self):
+        old=self.make_run("completed",200,"failure")
+        old["display_title"]="Vegasbark auto:2026-11-23:20:02"
+        newer=self.make_run("completed",20,"success")
+        newer["id"]=456
+        newer["display_title"]="Vegasbark auto:2026-11-23:20:02"
+        with patch.object(dog,"load_state",return_value=(self.state,"sha")), \
+             patch.object(dog,"get_runs",return_value=[old,newer]), \
+             patch.object(dog,"slot_recovery",return_value=[]), \
+             patch.object(dog,"save_state"), \
+             patch.object(dog,"dispatch_task") as dispatch:
+            dog.main()
+        self.assertNotIn("123",self.state["runs"])
+        dispatch.assert_not_called()
+
     def test_legacy_state_migrates_pending_slot(self):
         state=dog.normalize_state({"task_id":"auto:2026-11-23:16:02",
             "slot":"2026-11-23T16:02:00+08:00",
