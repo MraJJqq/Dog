@@ -377,7 +377,8 @@ def slot_recovery(runs, state, now):
     """Keep every due slot pending until its scan has a confirmed successful run."""
     pending_dispatches = []
     # Register today's and yesterday's due slots; older pending slots remain in state.
-    for day in (now.date(), now.date() - timedelta(days=1)):
+    local_date = now.astimezone(TZ).date()
+    for day in (local_date, local_date - timedelta(days=1)):
         for value in SLOTS:
             hour, minute = map(int, value.split(":"))
             slot = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
