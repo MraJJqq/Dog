@@ -32,11 +32,38 @@
       "completed_at": "2026-11-23T06:22:10Z"
     },
     "45123250752": {
+      "attempt": 2,
+      "status": "retry_requested",
+      "conclusion": "failure",
+      "retry_requested_attempt": 2,
+      "retry_requested_at": "2026-11-23T12:17:55.270008+00:00"
+    },
+    "45172724043": {
       "attempt": 1,
       "status": "retry_requested",
       "retry_requested_attempt": 1,
-      "retry_requested_at": "2026-11-23T12:16:15.083143+00:00",
+      "retry_requested_at": "2026-11-23T12:17:55.270008+00:00",
       "conclusion": "failure"
+    },
+    "45172720710": {
+      "attempt": 1,
+      "status": "retry_requested",
+      "retry_requested_attempt": 1,
+      "retry_requested_at": "2026-11-23T12:17:55.270008+00:00",
+      "conclusion": "cancelled"
+    },
+    "45172717089": {
+      "attempt": 1,
+      "status": "retry_requested",
+      "retry_requested_attempt": 1,
+      "retry_requested_at": "2026-11-23T12:17:55.270008+00:00",
+      "conclusion": "cancelled"
+    },
+    "45172713586": {
+      "attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:16:59Z"
     }
   },
   "slots": {
@@ -47,24 +74,28 @@
       "run_id": 45159464772
     },
     "2026-11-23 08:02": {
-      "status": "dispatch_pending",
+      "status": "run_found",
       "task_id": "auto:2026-11-23:08:02",
-      "dispatched_at": "2026-11-23T12:16:15.083143+00:00"
+      "dispatched_at": "2026-11-23T12:16:15.083143+00:00",
+      "run_id": 45172713586
     },
     "2026-11-23 10:02": {
-      "status": "dispatch_pending",
+      "status": "run_found",
       "task_id": "auto:2026-11-23:10:02",
-      "dispatched_at": "2026-11-23T12:16:15.083143+00:00"
+      "dispatched_at": "2026-11-23T12:16:15.083143+00:00",
+      "run_id": 45172717089
     },
     "2026-11-23 20:02": {
-      "status": "dispatch_pending",
+      "status": "run_found",
       "task_id": "auto:2026-11-23:20:02",
-      "dispatched_at": "2026-11-23T12:16:15.083143+00:00"
+      "dispatched_at": "2026-11-23T12:16:15.083143+00:00",
+      "run_id": 45172720710
     },
     "2026-11-22 22:02": {
-      "status": "dispatch_pending",
+      "status": "run_found",
       "task_id": "auto:2026-11-22:22:02",
-      "dispatched_at": "2026-11-23T12:16:15.083143+00:00"
+      "dispatched_at": "2026-11-23T12:16:15.083143+00:00",
+      "run_id": 45172724043
     }
   }
 }
