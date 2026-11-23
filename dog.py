@@ -122,9 +122,16 @@ def _list_runs(query):
 
 
 def get_runs(now):
-    """Fetch every completed scan plus every active queued/running scan."""
+    """Fetch recent scans, every active scan, and all non-success conclusions."""
     merged = {}
-    for query in ("status=completed", "status=queued", "status=in_progress"):
+    cutoff = now - timedelta(seconds=RECENT_SECONDS)
+    queries = [f"created=%3E{cutoff.strftime('%Y-%m-%d')}"]
+    queries.extend(f"status={status}" for status in (
+        "queued", "in_progress", "waiting", "pending", "requested",
+        "failure", "cancelled", "timed_out", "action_required",
+        "stale", "neutral", "skipped",
+    ))
+    for query in queries:
         for run in _list_runs(query):
             merged[str(run["id"])] = run
     return list(merged.values())
