@@ -180,16 +180,21 @@ def slot_recovery(runs, state, now):
             if (now - slot).total_seconds() > 24 * 3600:
                 continue
             found = False
+            task_id = f"auto:{slot:%Y-%m-%d}:{slot:%H:%M}"
             for run in runs:
+                if run.get("event") == "workflow_dispatch":
+                    title = (run.get("display_title") or run.get("name") or "")
+                    if task_id in title:
+                        found = True
+                        break
                 if run.get("event") != "schedule":
                     continue
                 created = parse_time(run["created_at"])
                 delta = (created - slot.astimezone(UTC)).total_seconds()
-                if -120 <= delta <= 30 * 60:
+                if -120 <= delta <= 2 * 3600 - 120:
                     found = True
                     break
             if not found:
-                task_id = f"auto:{slot:%Y-%m-%d}:{slot:%H:%M}"
                 dispatch_recovery(task_id)
                 state["slots"][slot_key] = {
                     "status": "recovery_dispatched",
