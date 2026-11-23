@@ -21,7 +21,6 @@ API = "https://api.github.com"
 TOKEN = os.getenv("DOG_GITHUB_TOKEN", "")
 LIMIT_SECONDS = 360
 RECENT_SECONDS = 48 * 3600
-SLOT_TOLERANCE_SECONDS = 30 * 60
 
 
 def api(method, path, payload=None):
@@ -264,8 +263,18 @@ def _run_matches_slot(run, slot, task_id):
         return task_id in title
     if run.get("event") == "schedule":
         try:
+            slot_index = SLOTS.index(slot.strftime("%H:%M"))
+            if slot_index + 1 < len(SLOTS):
+                next_hour, next_minute = map(int, SLOTS[slot_index + 1].split(":"))
+                next_slot = slot.replace(hour=next_hour, minute=next_minute)
+            else:
+                next_day = slot + timedelta(days=1)
+                next_slot = next_day.replace(hour=8, minute=2)
+            interval = (next_slot - slot).total_seconds()
             delta = (parse_time(run["created_at"]) - slot.astimezone(UTC)).total_seconds()
-            return -SLOT_TOLERANCE_SECONDS <= delta <= SLOT_TOLERANCE_SECONDS
+            # Non-overlapping slot window: from two minutes before this slot
+            # until two minutes before the next configured slot.
+            return -120 <= delta < interval - 120
         except (KeyError, TypeError, ValueError):
             return False
     return False
