@@ -31,35 +31,29 @@
       "conclusion": "success",
       "completed_at": "2026-11-23T06:22:10Z"
     },
-    "45172724043": {
-      "attempt": 6,
-      "status": "retry_requested",
-      "conclusion": "failure",
-      "retry_requested_attempt": 6,
-      "retry_requested_at": "2026-11-23T12:27:10.779615+00:00",
-      "retry_task_id": "auto:2026-11-22:22:02"
-    },
-    "45172720710": {
-      "attempt": 3,
-      "status": "retry_requested",
-      "conclusion": "failure",
-      "retry_requested_attempt": 3,
-      "retry_requested_at": "2026-11-23T12:27:10.779615+00:00",
-      "retry_task_id": "auto:2026-11-23:20:02"
-    },
-    "45172717089": {
-      "attempt": 2,
-      "status": "retry_requested",
-      "conclusion": "failure",
-      "retry_requested_attempt": 2,
-      "retry_requested_at": "2026-11-23T12:27:10.779615+00:00",
-      "retry_task_id": "auto:2026-11-23:10:02"
-    },
     "45172713586": {
       "attempt": 1,
       "status": "completed",
       "conclusion": "success",
       "completed_at": "2026-11-23T12:16:59Z"
+    },
+    "45174459662": {
+      "attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:28:08Z"
+    },
+    "45174456155": {
+      "attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:28:06Z"
+    },
+    "45174451847": {
+      "attempt": 1,
+      "status": "completed",
+      "conclusion": "success",
+      "completed_at": "2026-11-23T12:28:03Z"
     }
   },
   "slots": {
@@ -79,19 +73,19 @@
       "status": "run_found",
       "task_id": "auto:2026-11-23:10:02",
       "dispatched_at": "2026-11-23T12:16:15.083143+00:00",
-      "run_id": 45172717089
+      "run_id": 45174459662
     },
     "2026-11-23 20:02": {
       "status": "run_found",
       "task_id": "auto:2026-11-23:20:02",
       "dispatched_at": "2026-11-23T12:16:15.083143+00:00",
-      "run_id": 45172720710
+      "run_id": 45174456155
     },
     "2026-11-22 22:02": {
       "status": "run_found",
       "task_id": "auto:2026-11-22:22:02",
       "dispatched_at": "2026-11-23T12:16:15.083143+00:00",
-      "run_id": 45172724043
+      "run_id": 45174451847
     }
   }
 }
