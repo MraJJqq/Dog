@@ -356,7 +356,9 @@ def main():
     state, sha = load_state()
     runs = [run for run in get_runs(now) if is_scan_run(run)]
     pending_actions = []
-    retry_action_selected = False
+    # Do not queue a failed-run retry behind another active scan. This also
+    # protects legacy runs that still carry the former shared concurrency group.
+    retry_action_selected = any(run.get("status") != "completed" for run in runs)
     for run in runs:
         if run.get("status") == "completed" and run.get("conclusion") != "success" and retry_action_selected:
             continue
