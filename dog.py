@@ -203,9 +203,18 @@ def main():
             return
 
         if status == "queued":
-            state.update({"status": "queued", "updated_at": now.isoformat()})
+            # A queued automatic run has not started by this watchdog check.
+            # Cancel it and wait for GitHub to confirm cancellation; the next
+            # watchdog check will dispatch a fresh full scan after completion.
+            api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run['id']}/cancel")
+            state.update({
+                "status": "cancel_requested",
+                "cancel_reason": "queued_not_started",
+                "cancel_requested_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+            })
             save_state(state, sha)
-            print(f"{task_id}: queued; waiting without cancelling another task.")
+            print(f"{task_id}: run is still queued; cancellation requested for recovery.")
             return
 
     # A cancelled or vanished run is restarted as one complete scan + push.
