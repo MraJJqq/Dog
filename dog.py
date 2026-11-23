@@ -168,36 +168,85 @@ def is_scan_run(run):
     return run.get("event") in ("schedule", "workflow_dispatch")
 
 
+def dispatch_task(task_id, source, manual, restore_run_id=None):
+    inputs = {"manual": manual, "task_id": task_id, "source": source}
+    if source == "scheduled":
+        parts = task_id.split(":", 2)
+        slot = parts[2] if len(parts) == 3 else ""
+        schedule_keys = {
+            "08:02": "2 0 * * *",
+            "10:02": "2 2 * * *",
+            "16:02": "2 8 * * *",
+            "20:02": "2 12 * * *",
+            "22:02": "2 14 * * *",
+        }
+        schedule_key = schedule_keys.get(slot)
+        if not schedule_key:
+            raise RuntimeError(f"Unknown scheduled slot in recovery task: {task_id}")
+        inputs["schedule_key"] = schedule_key
+    if restore_run_id is not None:
+        inputs["restore_run_id"] = str(restore_run_id)
+    api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/dispatches",
+        {"ref": BRANCH, "inputs": inputs})
+    print(f"Retry scan dispatched: {task_id} ({source})")
+
+
 def dispatch_recovery(task_id):
-    parts = task_id.split(":", 2)
-    slot = parts[2] if len(parts) == 3 else ""
-    schedule_keys = {
-        "08:02": "2 0 * * *",
-        "10:02": "2 2 * * *",
-        "16:02": "2 8 * * *",
-        "20:02": "2 12 * * *",
-        "22:02": "2 14 * * *",
-    }
-    schedule_key = schedule_keys.get(slot)
-    if not schedule_key:
-        raise RuntimeError(f"Unknown scheduled slot in recovery task: {task_id}")
-    api(
-        "POST",
-        f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/dispatches",
-        {"ref": BRANCH, "inputs": {
-            "manual": False, "task_id": task_id,
-            "source": "scheduled", "schedule_key": schedule_key,
-        }},
-    )
-    print(f"Recovery scan dispatched: {task_id}")
+    dispatch_task(task_id, "scheduled", False)
 
 
 def cancel_run(run_id):
     api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run_id}/cancel")
 
 
-def rerun(run_id):
-    api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run_id}/rerun")
+def _scheduled_task_id(created_at):
+    created = parse_time(created_at).astimezone(TZ)
+    candidates = []
+    for offset in (0, 1):
+        day = created.date() - timedelta(days=offset)
+        for value in SLOTS:
+            hour, minute = map(int, value.split(":"))
+            slot = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
+            if slot <= created:
+                candidates.append(slot)
+    if not candidates:
+        return None
+    slot = max(candidates)
+    return f"auto:{slot:%Y-%m-%d}:{slot:%H:%M}"
+
+
+def _task_descriptor(run):
+    event = run.get("event")
+    if event == "schedule":
+        task_id = _scheduled_task_id(run.get("created_at", ""))
+        return (task_id, "scheduled", False) if task_id else None
+    if event == "workflow_dispatch":
+        title = run.get("display_title") or ""
+        prefix = "Vegasbark "
+        task_id = title[len(prefix):] if title.startswith(prefix) else str(run["id"])
+        if not task_id:
+            task_id = str(run["id"])
+        if task_id.startswith("auto:"):
+            return task_id, "scheduled", False
+        return task_id, "manual", True
+    return None
+
+
+def _has_newer_task_run(run, runs):
+    descriptor = _task_descriptor(run)
+    if not descriptor:
+        return False
+    task_id = descriptor[0]
+    created = parse_time(run["created_at"])
+    for other in runs:
+        if str(other.get("id")) == str(run.get("id")):
+            continue
+        other_descriptor = _task_descriptor(other)
+        if not other_descriptor or other_descriptor[0] != task_id:
+            continue
+        if parse_time(other["created_at"]) > created:
+            return True
+    return False
 
 
 def _request_cancel(run, record, attempt, now, reason):
@@ -212,7 +261,7 @@ def _request_cancel(run, record, attempt, now, reason):
     print(f"Run {run['id']} {reason}; cancellation queued.")
     return ("cancel", run["id"])
 
-def monitor_run(run, state, now):
+def monitor_run(run, state, now, retry_descriptor=None):
     run_id = str(run["id"])
     record = state["runs"].setdefault(run_id, {})
     attempt = int(run.get("run_attempt") or 1)
@@ -237,11 +286,17 @@ def monitor_run(run, state, now):
         if retry_at and retry_attempt == attempt:
             if (now - parse_time(retry_at)).total_seconds() < LIMIT_SECONDS:
                 return None
+        if not retry_descriptor:
+            record.update({"attempt": attempt, "status": "retry_unroutable",
+                           "conclusion": conclusion})
+            return None
+        task_id, source, manual = retry_descriptor
         record.update({"attempt": attempt, "status": "retry_requested",
                        "retry_requested_attempt": attempt,
-                       "retry_requested_at": iso_now(now), "conclusion": conclusion})
-        print(f"Run {run_id} attempt {attempt} failed ({conclusion}); rerun queued.")
-        return ("rerun", run["id"])
+                       "retry_requested_at": iso_now(now),
+                       "retry_task_id": task_id, "conclusion": conclusion})
+        print(f"Run {run_id} attempt {attempt} failed ({conclusion}); replacement dispatch queued.")
+        return ("dispatch_retry", task_id, source, manual, run["id"])
 
     if status in ("queued", "waiting", "pending", "requested"):
         if not record.get("queued_since"):
@@ -260,7 +315,7 @@ def monitor_run(run, state, now):
             started = parse_time(started_value)
         else:
             if not record.get("running_since"):
-                record["running_since"] = started_value or run.get("updated_at") or iso_now(now)
+                record["running_since"] = run.get("updated_at") or iso_now(now)
             started = parse_time(record["running_since"])
         age = (now - started).total_seconds()
         if age >= LIMIT_SECONDS:
@@ -271,6 +326,7 @@ def monitor_run(run, state, now):
 
     record.update({"attempt": attempt, "status": status or "unknown"})
     return None
+
 
 def _slot_key(slot):
     return slot.strftime("%Y-%m-%d %H:%M")
@@ -334,6 +390,8 @@ def prune_state(state, runs, now):
     keep_run_ids = set()
     for run in runs:
         try:
+            if state["runs"].get(str(run["id"]), {}).get("status") == "superseded":
+                continue
             if run.get("status") != "completed" or run.get("conclusion") != "success" or parse_time(run["created_at"]) >= cutoff:
                 keep_run_ids.add(str(run["id"]))
         except (KeyError, TypeError, ValueError):
@@ -356,33 +414,39 @@ def main():
     state, sha = load_state()
     runs = [run for run in get_runs(now) if is_scan_run(run)]
     pending_actions = []
-    # Do not queue a failed-run retry behind another active scan. This also
-    # protects legacy runs that still carry the former shared concurrency group.
-    retry_action_selected = any(run.get("status") != "completed" for run in runs)
+
     for run in runs:
-        if run.get("status") == "completed" and run.get("conclusion") != "success" and retry_action_selected:
-            continue
+        if run.get("status") == "completed" and run.get("conclusion") != "success":
+            if _has_newer_task_run(run, runs):
+                state["runs"].setdefault(str(run["id"]), {}).update({
+                    "status": "superseded", "conclusion": run.get("conclusion"),
+                    "attempt": int(run.get("run_attempt") or 1),
+                })
+                continue
+            descriptor = _task_descriptor(run)
+        else:
+            descriptor = None
+
         if run.get("status") != "completed" or run.get("conclusion") != "success" or parse_time(run["created_at"]) >= now - timedelta(seconds=RECENT_SECONDS):
-            action = monitor_run(run, state, now)
+            action = monitor_run(run, state, now, descriptor)
             if action:
                 pending_actions.append(action)
-                if action[0] == "rerun":
-                    # Legacy workflow runs may still carry the old shared concurrency
-                    # group. Retry one failed run per cycle so they cannot cancel
-                    # each other's pending attempts.
-                    retry_action_selected = True
+
     pending_dispatches = slot_recovery(runs, state, now)
     prune_state(state, runs, now)
-    # Persist all intents before issuing side-effecting GitHub API calls.
+
+    # Persist all retry/cancel/dispatch intents before side-effecting API calls.
     save_state(state, sha)
-    for action, run_id in pending_actions:
-        if action == "cancel":
-            cancel_run(run_id)
-        elif action == "rerun":
-            rerun(run_id)
+    for action in pending_actions:
+        if action[0] == "cancel":
+            cancel_run(action[1])
+        elif action[0] == "dispatch_retry":
+            dispatch_task(action[1], action[2], action[3], restore_run_id=action[4])
     for task_id in pending_dispatches:
         dispatch_recovery(task_id)
+
     print(f"Dog checked {len(runs)} Bark scan runs.")
+
 
 if __name__ == "__main__":
     try:
