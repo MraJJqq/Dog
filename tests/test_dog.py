@@ -1,4 +1,6 @@
 import unittest
+import io
+import urllib.error
 from datetime import datetime,timedelta
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -11,6 +13,26 @@ class DogMonitorTests(unittest.TestCase):
     def setUp(self):
         self.now=datetime(2026,11,23,0,8,tzinfo=UTC)
         self.state={"schema_version":2,"runs":{},"slots":{}}
+
+    def test_api_404_raises_unless_explicitly_allowed(self):
+        error = urllib.error.HTTPError(
+            "https://api.github.com/test", 404, "Not Found", {},
+            io.BytesIO(b'{"message":"Not Found"}'),
+        )
+        with patch.object(dog, "TOKEN", "test-token"), \
+             patch("dog.urllib.request.urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "GitHub API 404"):
+                dog.api("GET", "/test")
+        with patch.object(dog, "TOKEN", "test-token"), \
+             patch("dog.urllib.request.urlopen", side_effect=error):
+            self.assertEqual(dog.api("GET", "/test", allow_404=True), (404, {}))
+
+    def test_load_state_allows_missing_state_file_only(self):
+        with patch("dog.api", return_value=(404, {})) as api_mock:
+            state, sha = dog.load_state()
+        self.assertEqual(state, {"schema_version": 2, "runs": {}, "slots": {}})
+        self.assertIsNone(sha)
+        self.assertTrue(api_mock.call_args.kwargs["allow_404"])
 
     def make_run(self,status="queued",age=0,conclusion=None):
         created=self.now-timedelta(seconds=age)
