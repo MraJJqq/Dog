@@ -145,7 +145,7 @@ def dispatch_recovery(task_id):
     api(
         "POST",
         f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/dispatches",
-        {"ref": BRANCH, "inputs": {"manual": "false", "task_id": task_id, "source": "scheduled"}},
+        {"ref": BRANCH, "inputs": {"manual": False, "task_id": task_id, "source": "scheduled"}},
     )
     print(f"Recovery scan dispatched: {task_id}")
 
@@ -162,16 +162,13 @@ def _request_cancel(run, record, attempt, now, reason):
     last = record.get("cancel_requested_at")
     if last and record.get("cancel_requested_attempt") == attempt:
         if (now - parse_time(last)).total_seconds() < LIMIT_SECONDS:
-            return
-    cancel_run(run["id"])
+            return None
     record.update({
-        "attempt": attempt,
-        "status": "cancel_requested",
-        "cancel_requested_attempt": attempt,
-        "cancel_requested_at": iso_now(now),
+        "attempt": attempt, "status": "cancel_requested",
+        "cancel_requested_attempt": attempt, "cancel_requested_at": iso_now(now),
     })
-    print(f"Run {run['id']} {reason}; cancellation requested.")
-
+    print(f"Run {run['id']} {reason}; cancellation queued.")
+    return ("cancel", run["id"])
 
 def monitor_run(run, state, now):
     run_id = str(run["id"])
@@ -179,54 +176,41 @@ def monitor_run(run, state, now):
     attempt = int(run.get("run_attempt") or 1)
     status = run.get("status")
     conclusion = run.get("conclusion")
-
     previous_attempt = int(record.get("attempt", 0))
     if previous_attempt != attempt:
         record["attempt"] = attempt
-        record.pop("cancel_requested_at", None)
-        record.pop("cancel_requested_attempt", None)
-        record.pop("retry_requested_at", None)
-        record.pop("retry_requested_attempt", None)
-        record.pop("queued_since", None)
-        record.pop("running_since", None)
+        for key in ("cancel_requested_at", "cancel_requested_attempt",
+                    "retry_requested_at", "retry_requested_attempt",
+                    "queued_since", "running_since"):
+            record.pop(key, None)
 
     if status == "completed":
         if conclusion == "success":
-            record.update({
-                "attempt": attempt,
-                "status": "completed",
-                "conclusion": "success",
-                "completed_at": run.get("updated_at") or iso_now(now),
-            })
-            return
+            record.update({"attempt": attempt, "status": "completed",
+                           "conclusion": "success",
+                           "completed_at": run.get("updated_at") or iso_now(now)})
+            return None
         retry_at = record.get("retry_requested_at")
         retry_attempt = int(record.get("retry_requested_attempt", 0))
         if retry_at and retry_attempt == attempt:
             if (now - parse_time(retry_at)).total_seconds() < LIMIT_SECONDS:
-                return
-        rerun(run["id"])
-        record.update({
-            "attempt": attempt,
-            "status": "retry_requested",
-            "retry_requested_attempt": attempt,
-            "retry_requested_at": iso_now(now),
-            "conclusion": conclusion,
-        })
-        print(f"Run {run_id} attempt {attempt} failed ({conclusion}); rerun requested.")
-        return
+                return None
+        record.update({"attempt": attempt, "status": "retry_requested",
+                       "retry_requested_attempt": attempt,
+                       "retry_requested_at": iso_now(now), "conclusion": conclusion})
+        print(f"Run {run_id} attempt {attempt} failed ({conclusion}); rerun queued.")
+        return ("rerun", run["id"])
 
     if status in ("queued", "waiting", "pending", "requested"):
         if not record.get("queued_since"):
-            # Original attempt is measured from GitHub's creation time.
-            # A later rerun attempt starts its own six-minute queue clock.
             queued_at = run.get("created_at") if attempt == 1 else None
             record["queued_since"] = queued_at or iso_now(now)
         age = (now - parse_time(record["queued_since"])).total_seconds()
         if age >= LIMIT_SECONDS:
-            _request_cancel(run, record, attempt, now, "has remained unstarted for six minutes")
-        else:
-            record.update({"attempt": attempt, "status": "queued"})
-        return
+            return _request_cancel(run, record, attempt, now,
+                                   "has remained unstarted for six minutes")
+        record.update({"attempt": attempt, "status": "queued"})
+        return None
 
     if status == "in_progress":
         started_value = run.get("run_started_at")
@@ -238,13 +222,13 @@ def monitor_run(run, state, now):
             started = parse_time(record["running_since"])
         age = (now - started).total_seconds()
         if age >= LIMIT_SECONDS:
-            _request_cancel(run, record, attempt, now, "has run for more than six minutes")
-        else:
-            record.update({"attempt": attempt, "status": "running"})
-        return
+            return _request_cancel(run, record, attempt, now,
+                                   "has run for more than six minutes")
+        record.update({"attempt": attempt, "status": "running"})
+        return None
 
     record.update({"attempt": attempt, "status": status or "unknown"})
-
+    return None
 
 def _slot_key(slot):
     return slot.strftime("%Y-%m-%d %H:%M")
@@ -268,6 +252,7 @@ def _run_matches_slot(run, slot, task_id):
 
 
 def slot_recovery(runs, state, now):
+    pending_dispatches = []
     for day in (now.date(), now.date() - timedelta(days=1)):
         for value in SLOTS:
             hour, minute = map(int, value.split(":"))
@@ -275,32 +260,22 @@ def slot_recovery(runs, state, now):
             elapsed = (now - slot).total_seconds()
             if elapsed < LIMIT_SECONDS or elapsed > 24 * 3600:
                 continue
-
             key = _slot_key(slot)
             task_id = _task_id(slot)
             matching = next((r for r in runs if _run_matches_slot(r, slot, task_id)), None)
             record = state["slots"].setdefault(key, {})
             if matching:
-                record.update({
-                    "status": "run_found",
-                    "task_id": task_id,
-                    "run_id": matching["id"],
-                    "last_seen_at": iso_now(now),
-                })
+                record.update({"status": "run_found", "task_id": task_id,
+                               "run_id": matching["id"], "last_seen_at": iso_now(now)})
                 continue
-
             dispatched_at = record.get("dispatched_at")
             if dispatched_at and (now - parse_time(dispatched_at)).total_seconds() < LIMIT_SECONDS:
                 continue
-
-            # A dispatch is not considered recovery until its workflow run is visible.
-            dispatch_recovery(task_id)
-            record.update({
-                "status": "recovery_dispatched",
-                "task_id": task_id,
-                "dispatched_at": iso_now(now),
-            })
-
+            # Persist intent before dispatch so an unrecorded API action cannot duplicate.
+            record.update({"status": "dispatch_pending", "task_id": task_id,
+                           "dispatched_at": iso_now(now)})
+            pending_dispatches.append(task_id)
+    return pending_dispatches
 
 def prune_state(state, runs, now):
     cutoff = now - timedelta(seconds=RECENT_SECONDS)
@@ -328,17 +303,24 @@ def main():
     now = datetime.now(UTC)
     state, sha = load_state()
     runs = [run for run in get_runs(now) if is_scan_run(run)]
-
-    # Every scheduled and manual Bark scan is monitored, including old active runs.
+    pending_actions = []
     for run in runs:
         if run.get("status") != "completed" or parse_time(run["created_at"]) >= now - timedelta(seconds=RECENT_SECONDS):
-            monitor_run(run, state, now)
-
-    slot_recovery(runs, state, now)
+            action = monitor_run(run, state, now)
+            if action:
+                pending_actions.append(action)
+    pending_dispatches = slot_recovery(runs, state, now)
     prune_state(state, runs, now)
+    # Persist all intents before issuing side-effecting GitHub API calls.
     save_state(state, sha)
+    for action, run_id in pending_actions:
+        if action == "cancel":
+            cancel_run(run_id)
+        elif action == "rerun":
+            rerun(run_id)
+    for task_id in pending_dispatches:
+        dispatch_recovery(task_id)
     print(f"Dog checked {len(runs)} Bark scan runs.")
-
 
 if __name__ == "__main__":
     try:
