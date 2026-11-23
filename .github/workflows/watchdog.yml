@@ -17,6 +17,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Test Dog monitoring logic
+        run: python -m unittest discover -s tests -v
       - name: Monitor and recover all Bark scans
         env:
           DOG_GITHUB_TOKEN: ${{ secrets.DOG_GITHUB_TOKEN }}
