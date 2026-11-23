@@ -106,6 +106,28 @@ class DogMonitorTests(unittest.TestCase):
             dog.save_state(state,"existing-sha")
         api.assert_not_called()
 
+    def test_only_one_failed_run_is_retried_per_cycle(self):
+        first=self.make_run("completed",20,"failure")
+        second=self.make_run("completed",30,"failure")
+        second["id"]=456
+        with patch.object(dog,"load_state",return_value=(self.state,"sha")), \
+             patch.object(dog,"get_runs",return_value=[first,second]), \
+             patch.object(dog,"slot_recovery",return_value=[]), \
+             patch.object(dog,"save_state"), patch.object(dog,"rerun") as retry:
+            dog.main()
+        retry.assert_called_once()
+
+    def test_active_scan_blocks_failed_run_retries(self):
+        active=self.make_run("in_progress",30)
+        failed=self.make_run("completed",20,"failure")
+        failed["id"]=456
+        with patch.object(dog,"load_state",return_value=(self.state,"sha")), \
+             patch.object(dog,"get_runs",return_value=[active,failed]), \
+             patch.object(dog,"slot_recovery",return_value=[]), \
+             patch.object(dog,"save_state"), patch.object(dog,"rerun") as retry:
+            dog.main()
+        retry.assert_not_called()
+
     def test_legacy_state_migrates_pending_slot(self):
         state=dog.normalize_state({"task_id":"auto:2026-11-23:16:02",
             "slot":"2026-11-23T16:02:00+08:00",
