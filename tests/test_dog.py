@@ -81,7 +81,7 @@ class DogMonitorTests(unittest.TestCase):
     def test_unchanged_state_does_not_create_a_commit(self):
         import json
         state={"schema_version":2,"runs":{},"slots":{}}
-        dog.STATE_CONTENT=json.dumps(state,ensure_ascii=False,indent=2)+"\\n"
+        dog.STATE_CONTENT=json.dumps(state,ensure_ascii=False,indent=2)+"\n"
         with patch("dog.api") as api:
             dog.save_state(state,"existing-sha")
         api.assert_not_called()
