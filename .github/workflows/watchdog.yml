@@ -19,5 +19,5 @@ jobs:
           python-version: "3.12"
       - name: Monitor and recover all Bark scans
         env:
-          DOG_GITHUB_TOKEN: \${{ secrets.DOG_GITHUB_TOKEN }}
+          DOG_GITHUB_TOKEN: ${{ secrets.DOG_GITHUB_TOKEN }}
         run: python dog.py
