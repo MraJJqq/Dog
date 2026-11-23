@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GitHub-only watchdog for Vegasbark automatic scans."""
+"""Monitor and recover every Vegasbark scan workflow run."""
 import base64
 import json
 import os
@@ -17,29 +17,30 @@ BARK_REPO = "Vegasbark"
 WORKFLOW = "scan.yml"
 BRANCH = "main"
 TZ = ZoneInfo("Asia/Shanghai")
+UTC = ZoneInfo("UTC")
 SLOTS = ("08:02", "10:02", "16:02", "20:02", "22:02")
 API = "https://api.github.com"
 TOKEN = os.environ["DOG_GITHUB_TOKEN"]
+LIMIT_SECONDS = 360
+RECENT_SECONDS = 48 * 3600
 
 
 def api(method, path, payload=None):
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(
-        API + path,
-        data=data,
-        method=method,
+        API + path, data=data, method=method,
         headers={
             "Authorization": f"Bearer {TOKEN}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "Content-Type": "application/json",
-            "User-Agent": "Dog-Watchdog/1.0",
+            "User-Agent": "Dog-Watchdog/2.0",
         },
     )
     try:
         with urllib.request.urlopen(req, timeout=25) as response:
             raw = response.read()
-            return response.status, (json.loads(raw.decode()) if raw else {})
+            return response.status, json.loads(raw.decode()) if raw else {}
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode(errors="replace")
         if exc.code == 404:
@@ -47,18 +48,25 @@ def api(method, path, payload=None):
         raise RuntimeError(f"GitHub API {exc.code}: {raw[:500]}") from exc
 
 
+def parse_time(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
 def load_state():
     status, body = api("GET", f"/repos/{OWNER}/{DOG_REPO}/contents/state.json?ref={BRANCH}")
     if status == 404:
-        return {}, None
+        return {"runs": {}, "slots": {}}, None
     content = base64.b64decode(body["content"]).decode()
-    return json.loads(content), body["sha"]
+    state = json.loads(content)
+    state.setdefault("runs", {})
+    state.setdefault("slots", {})
+    return state, body["sha"]
 
 
 def save_state(state, sha):
     content = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
     payload = {
-        "message": "Dog: update automatic scan state",
+        "message": "Dog: monitor and recover all Bark scans",
         "content": base64.b64encode(content.encode()).decode(),
         "branch": BRANCH,
     }
@@ -67,165 +75,161 @@ def save_state(state, sha):
     api("PUT", f"/repos/{OWNER}/{DOG_REPO}/contents/state.json", payload)
 
 
-def latest_slot(now):
-    candidates = []
-    for day in (now.date() - timedelta(days=1), now.date()):
-        for value in SLOTS:
-            hour, minute = map(int, value.split(":"))
-            candidate = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
-            if candidate <= now:
-                candidates.append(candidate)
-    return max(candidates) if candidates else None
-
-
 def get_runs():
-    _, body = api(
-        "GET",
-        f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/runs?per_page=100",
-    )
-    return body.get("workflow_runs", [])
+    runs = []
+    for page in range(1, 11):
+        _, body = api(
+            "GET",
+            f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/runs?per_page=100&page={page}",
+        )
+        batch = body.get("workflow_runs", [])
+        runs.extend(batch)
+        if len(batch) < 100:
+            break
+    return runs
 
 
-def find_task_run(runs, task_id, dispatch_time=None, slot_time=None):
-    matches = []
-    for run in runs:
-        name = run.get("name", "") or ""
-        run_name = run.get("display_title", "") or run.get("run_name", "") or ""
-        created = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
-        if task_id in name or task_id in run_name:
-            if dispatch_time:
-                lower = datetime.fromisoformat(dispatch_time).timestamp() - 90
-                if created.timestamp() < lower:
-                    continue
-            matches.append(run)
-        elif slot_time and run.get("event") == "schedule":
-            slot_utc = slot_time.astimezone(ZoneInfo("UTC"))
-            delta = (created - slot_utc).total_seconds()
-            if -120 <= delta <= 10 * 60 * 60:
-                matches.append(run)
-    if not matches:
-        return None
-    return max(matches, key=lambda item: item["created_at"])
+def is_scan_run(run):
+    # Push-triggered runs only warm the cache; they do not perform a Bark scan.
+    return run.get("event") in ("schedule", "workflow_dispatch")
 
 
-def dispatch(task_id, now_iso, state, sha):
-    # Persist intent before dispatch so a Dog interruption cannot lose the task.
-    state.update({
-        "task_id": task_id,
-        "status": "dispatch_pending",
-        "run_id": None,
-        "dispatch_requested_at": now_iso,
-        "updated_at": now_iso,
-    })
-    save_state(state, sha)
+def dispatch_recovery(task_id):
     api(
         "POST",
         f"/repos/{OWNER}/{BARK_REPO}/actions/workflows/{WORKFLOW}/dispatches",
-        {
-            "ref": BRANCH,
-            "inputs": {
-                "manual": "false",
-                "task_id": task_id,
-                "source": "scheduled",
-            },
-        },
+        {"ref": BRANCH, "inputs": {"manual": "false", "task_id": task_id, "source": "scheduled"}},
     )
-    print(f"Dispatched full automatic task: {task_id}")
+    print(f"Recovery scan dispatched: {task_id}")
+
+
+def cancel_run(run_id):
+    api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run_id}/cancel")
+
+
+def rerun(run_id):
+    api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run_id}/rerun")
+
+
+def monitor_run(run, state, now):
+    run_id = str(run["id"])
+    record = state["runs"].setdefault(run_id, {})
+    attempt = int(run.get("run_attempt") or 1)
+    status = run.get("status")
+    conclusion = run.get("conclusion")
+    created = parse_time(run["created_at"])
+    started_value = run.get("run_started_at")
+    started = parse_time(started_value) if started_value else created
+    age = (now - (started if status == "in_progress" else created)).total_seconds()
+
+    if status == "completed":
+        if conclusion == "success":
+            record.update({"attempt": attempt, "status": "completed", "conclusion": "success"})
+            return
+        last_retry_attempt = int(record.get("retry_attempt", 0))
+        retry_requested_at = record.get("retry_requested_at")
+        retry_wait = (now - parse_time(retry_requested_at)).total_seconds() if retry_requested_at else LIMIT_SECONDS + 1
+        if last_retry_attempt == attempt and retry_wait < LIMIT_SECONDS:
+            return
+        rerun(run["id"])
+        record.update({
+            "attempt": attempt, "status": "retry_requested",
+            "retry_attempt": attempt, "retry_requested_at": now.isoformat(),
+            "conclusion": conclusion,
+        })
+        print(f"Run {run_id} attempt {attempt} failed ({conclusion}); full workflow rerun requested.")
+        return
+
+    if status in ("queued", "waiting", "pending", "requested"):
+        if age >= LIMIT_SECONDS or status == "queued":
+            if record.get("cancel_requested_attempt") != attempt:
+                cancel_run(run["id"])
+                record.update({
+                    "attempt": attempt, "status": "cancel_requested",
+                    "cancel_requested_attempt": attempt,
+                    "cancel_requested_at": now.isoformat(),
+                })
+                print(f"Run {run_id} has not started; cancellation requested for recovery.")
+        return
+
+    if status == "in_progress":
+        if age > LIMIT_SECONDS and record.get("cancel_requested_attempt") != attempt:
+            cancel_run(run["id"])
+            record.update({
+                "attempt": attempt, "status": "cancel_requested",
+                "cancel_requested_attempt": attempt,
+                "cancel_requested_at": now.isoformat(),
+            })
+            print(f"Run {run_id} exceeded 6 minutes; cancellation requested.")
+        else:
+            record.update({"attempt": attempt, "status": "running"})
+        return
+
+    # Unknown non-terminal statuses are retained and checked again next cycle.
+    record.update({"attempt": attempt, "status": status or "unknown"})
+
+
+def slot_recovery(runs, state, now):
+    for day in (now.date(), now.date() - timedelta(days=1)):
+        for value in SLOTS:
+            hour, minute = map(int, value.split(":"))
+            slot = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
+            slot_key = slot.strftime("%Y-%m-%d %H:%M")
+            if slot_key in state["slots"] or (now - slot).total_seconds() < LIMIT_SECONDS:
+                continue
+            if (now - slot).total_seconds() > 24 * 3600:
+                continue
+            found = False
+            for run in runs:
+                if run.get("event") != "schedule":
+                    continue
+                created = parse_time(run["created_at"])
+                delta = (created - slot.astimezone(UTC)).total_seconds()
+                if -120 <= delta <= 30 * 60:
+                    found = True
+                    break
+            if not found:
+                task_id = f"auto:{slot:%Y-%m-%d}:{slot:%H:%M}"
+                dispatch_recovery(task_id)
+                state["slots"][slot_key] = {
+                    "status": "recovery_dispatched",
+                    "task_id": task_id,
+                    "dispatched_at": now.isoformat(),
+                }
 
 
 def main():
-    now = datetime.now(TZ)
-    slot = latest_slot(now)
-    if slot is None:
-        print("No automatic scan slot has occurred yet.")
-        return
-
-    task_id = f"auto:{slot:%Y-%m-%d}:{slot:%H:%M}"
+    now = datetime.now(UTC)
     state, sha = load_state()
-    if state.get("task_id") != task_id:
-        state = {
-            "task_id": task_id,
-            "slot": slot.isoformat(),
-            "status": "pending",
-            "run_id": None,
-            "dispatch_requested_at": None,
-            "updated_at": now.isoformat(),
-        }
-        save_state(state, sha)
-        sha = None  # Contents API returned a new commit; reload SHA before the next write.
-        state, sha = load_state()
+    runs = [run for run in get_runs() if is_scan_run(run)]
+    cutoff = now - timedelta(seconds=RECENT_SECONDS)
 
-    if state.get("status") == "completed":
-        print(f"{task_id}: already completed.")
-        return
+    # Monitor every active Bark scan, including older runs, and all recent terminal runs.
+    for run in runs:
+        if run.get("status") != "completed" or parse_time(run["created_at"]) >= cutoff:
+            monitor_run(run, state, now)
 
-    runs = get_runs()
-    run = None
-    if state.get("run_id"):
-        _, run = api("GET", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{state['run_id']}")
-    else:
-        run = find_task_run(
-            runs,
-            task_id,
-            dispatch_time=state.get("dispatch_requested_at"),
-            slot_time=slot if not state.get("dispatch_requested_at") else None,
+    # Detect a missed native scheduled scan and start one recovery scan.
+    slot_recovery(runs, state, now)
+
+    # Keep state bounded without dropping active runs or the recent recovery history.
+    active_ids = {
+        str(run["id"]) for run in runs
+        if run.get("status") != "completed" or parse_time(run["created_at"]) >= cutoff
+    }
+    state["runs"] = {
+        key: value for key, value in state["runs"].items()
+        if key in active_ids or (
+            value.get("status") == "completed"
+            and key in {str(r["id"]) for r in runs if parse_time(r["created_at"]) >= cutoff}
         )
-
-    if run:
-        state["run_id"] = run["id"]
-        state["run_created_at"] = run.get("created_at")
-        status = run.get("status")
-        if status == "completed":
-            if run.get("conclusion") == "success":
-                state.update({"status": "completed", "completed_at": now.isoformat(), "updated_at": now.isoformat()})
-                save_state(state, sha)
-                print(f"{task_id}: completed successfully.")
-                return
-            state.update({"status": "failed", "last_conclusion": run.get("conclusion"), "run_id": None})
-            save_state(state, sha)
-            state, sha = load_state()
-            dispatch(task_id, now.isoformat(), state, sha)
-            return
-
-        if status == "in_progress":
-            started = run.get("run_started_at") or run.get("created_at")
-            started_at = datetime.fromisoformat(started.replace("Z", "+00:00"))
-            elapsed = (now.astimezone(ZoneInfo("UTC")) - started_at).total_seconds()
-            if elapsed > 360:
-                api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run['id']}/cancel")
-                state.update({"status": "cancel_requested", "updated_at": now.isoformat()})
-                save_state(state, sha)
-                print(f"{task_id}: run exceeded 6 minutes; cancellation requested.")
-                return
-            state.update({"status": "running", "updated_at": now.isoformat()})
-            save_state(state, sha)
-            print(f"{task_id}: running ({int(elapsed)} seconds).")
-            return
-
-        if status == "queued":
-            # A queued automatic run has not started by this watchdog check.
-            # Cancel it and wait for GitHub to confirm cancellation; the next
-            # watchdog check will dispatch a fresh full scan after completion.
-            api("POST", f"/repos/{OWNER}/{BARK_REPO}/actions/runs/{run['id']}/cancel")
-            state.update({
-                "status": "cancel_requested",
-                "cancel_reason": "queued_not_started",
-                "cancel_requested_at": now.isoformat(),
-                "updated_at": now.isoformat(),
-            })
-            save_state(state, sha)
-            print(f"{task_id}: run is still queued; cancellation requested for recovery.")
-            return
-
-    # A cancelled or vanished run is restarted as one complete scan + push.
-    requested = state.get("dispatch_requested_at")
-    if requested:
-        requested_at = datetime.fromisoformat(requested)
-        if (now - requested_at).total_seconds() < 360:
-            print(f"{task_id}: dispatch is being registered by GitHub.")
-            return
-
-    dispatch(task_id, now.isoformat(), state, sha)
+    }
+    state["slots"] = {
+        key: value for key, value in state["slots"].items()
+        if (now - parse_time(value["dispatched_at"])).total_seconds() <= 48 * 3600
+    }
+    save_state(state, sha)
+    print(f"Dog checked {len(runs)} Bark scan runs.")
 
 
 if __name__ == "__main__":
