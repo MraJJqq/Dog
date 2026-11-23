@@ -31,6 +31,19 @@ class DogMonitorTests(unittest.TestCase):
             "queued_since":stamp(self.now-timedelta(seconds=720))}
         self.assertEqual(dog.monitor_run(self.make_run(age=720),self.state,self.now),("cancel",123))
 
+    def test_rerun_attempt_queue_uses_its_own_updated_time(self):
+        run=self.make_run(age=7200)
+        run["run_attempt"]=2
+        run["updated_at"]=stamp(self.now-timedelta(seconds=360))
+        self.state["runs"]["123"]={"attempt":1}
+        self.assertEqual(dog.monitor_run(run,self.state,self.now),("cancel",123))
+
+    def test_rerun_attempt_runtime_uses_run_started_at(self):
+        run=self.make_run("in_progress",360)
+        run["run_attempt"]=2
+        self.state["runs"]["123"]={"attempt":1}
+        self.assertEqual(dog.monitor_run(run,self.state,self.now),("cancel",123))
+
     def test_running_over_six_minutes_is_cancelled(self):
         self.assertEqual(dog.monitor_run(self.make_run("in_progress",361),self.state,self.now),("cancel",123))
 
