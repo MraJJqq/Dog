@@ -169,7 +169,8 @@ def is_scan_run(run):
 
 
 def dispatch_recovery(task_id):
-    slot = task_id.rsplit(":", 1)[-1]
+    parts = task_id.split(":", 2)
+    slot = parts[2] if len(parts) == 3 else ""
     schedule_keys = {
         "08:02": "2 0 * * *",
         "10:02": "2 2 * * *",
