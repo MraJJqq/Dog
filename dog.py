@@ -356,11 +356,19 @@ def main():
     state, sha = load_state()
     runs = [run for run in get_runs(now) if is_scan_run(run)]
     pending_actions = []
+    retry_action_selected = False
     for run in runs:
+        if run.get("status") == "completed" and run.get("conclusion") != "success" and retry_action_selected:
+            continue
         if run.get("status") != "completed" or run.get("conclusion") != "success" or parse_time(run["created_at"]) >= now - timedelta(seconds=RECENT_SECONDS):
             action = monitor_run(run, state, now)
             if action:
                 pending_actions.append(action)
+                if action[0] == "rerun":
+                    # Legacy workflow runs may still carry the old shared concurrency
+                    # group. Retry one failed run per cycle so they cannot cancel
+                    # each other's pending attempts.
+                    retry_action_selected = True
     pending_dispatches = slot_recovery(runs, state, now)
     prune_state(state, runs, now)
     # Persist all intents before issuing side-effecting GitHub API calls.
