@@ -68,6 +68,13 @@ class DogMonitorTests(unittest.TestCase):
             state["slots"][key]["dispatched_at"]=stamp(self.now-timedelta(seconds=360))
             self.assertEqual(dog.slot_recovery([],state,self.now),[task])
 
+    @patch("dog.api")
+    def test_recovery_dispatch_uses_slot_specific_group(self, api_mock):
+        dog.dispatch_recovery("auto:2026-11-23:20:02")
+        payload=api_mock.call_args.args[2]
+        self.assertEqual(payload["inputs"]["schedule_key"],"2 12 * * *")
+        self.assertIs(payload["inputs"]["manual"],False)
+
     def test_recovery_run_matches_task_id(self):
         slot=datetime(2026,11,23,8,2,tzinfo=ZoneInfo("Asia/Shanghai"))
         task=dog._task_id(slot)
