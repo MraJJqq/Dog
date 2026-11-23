@@ -101,7 +101,7 @@ def find_task_run(runs, task_id, dispatch_time=None, slot_time=None):
         elif slot_time and run.get("event") == "schedule":
             slot_utc = slot_time.astimezone(ZoneInfo("UTC"))
             delta = (created - slot_utc).total_seconds()
-            if -120 <= delta <= 90 * 60:
+            if -120 <= delta <= 4 * 60 * 60:
                 matches.append(run)
     if not matches:
         return None
