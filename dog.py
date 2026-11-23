@@ -280,8 +280,8 @@ def _run_matches_slot(run, slot, task_id):
                 next_slot = next_day.replace(hour=8, minute=2)
             interval = (next_slot - slot).total_seconds()
             delta = (parse_time(run["created_at"]) - slot.astimezone(UTC)).total_seconds()
-            # Non-overlapping slot window: from two minutes before this slot
-            # until two minutes before the next configured slot.
+            # Non-overlapping slot window: from this scheduled slot
+            # up to, but not including, the next configured slot.
             return 0 <= delta < interval
         except (KeyError, TypeError, ValueError):
             return False
