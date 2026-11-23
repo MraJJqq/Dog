@@ -78,6 +78,14 @@ class DogMonitorTests(unittest.TestCase):
         self.assertEqual([r["id"] for r in runs],["left","right"])
         self.assertEqual(search.call_count,3)
 
+    def test_unchanged_state_does_not_create_a_commit(self):
+        import json
+        state={"schema_version":2,"runs":{},"slots":{}}
+        dog.STATE_CONTENT=json.dumps(state,ensure_ascii=False,indent=2)+"\\n"
+        with patch("dog.api") as api:
+            dog.save_state(state,"existing-sha")
+        api.assert_not_called()
+
     def test_legacy_state_migrates_pending_slot(self):
         state=dog.normalize_state({"task_id":"auto:2026-11-23:16:02",
             "slot":"2026-11-23T16:02:00+08:00",
