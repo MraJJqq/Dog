@@ -6,9 +6,10 @@ on:
     paths:
       - dog.py
       - tests/test_dog.py
-      - .github/workflows/watchdog.yml
+      - .github/workflows/dog-monitor.yml
   schedule:
-    # Run every six minutes; schedule is aligned with Bark slots.\n    - cron: "2-59/6 * * * *"
+    # Run every six minutes; schedule is aligned with Bark slots.
+    - cron: "2-59/6 * * * *"
   workflow_dispatch:
 permissions:
   contents: read
