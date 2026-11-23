@@ -72,6 +72,22 @@ class DogMonitorTests(unittest.TestCase):
             state["slots"][key]["dispatched_at"]=stamp(self.now-timedelta(seconds=360))
             self.assertEqual(dog.slot_recovery([],state,self.now),[task])
 
+    def test_slot_recovery_retries_pending_slots_after_24_hours(self):
+        slot=datetime(2026,11,22,8,2,tzinfo=ZoneInfo("Asia/Shanghai"))
+        key,task=dog._slot_key(slot),dog._task_id(slot)
+        state={"schema_version":2,"runs":{},"slots":{
+            key:{"task_id":task,"status":"dispatch_pending",
+                 "dispatched_at":stamp(self.now-timedelta(seconds=360))}}}
+        with patch.object(dog,"SLOTS",("08:02",)):
+            self.assertEqual(dog.slot_recovery([],state,self.now),[task])
+
+    def test_successful_slot_is_not_retried(self):
+        slot=datetime(2026,11,22,8,2,tzinfo=ZoneInfo("Asia/Shanghai"))
+        key,task=dog._slot_key(slot),dog._task_id(slot)
+        state={"schema_version":2,"runs":{},"slots":{
+            key:{"task_id":task,"status":"completed_success"}}}
+        with patch.object(dog,"SLOTS",("08:02",)):
+            self.assertEqual(dog.slot_recovery([],state,self.now),[])
     @patch("dog.api")
     def test_recovery_dispatch_uses_slot_specific_group(self, api_mock):
         dog.dispatch_recovery("auto:2026-11-23:20:02")

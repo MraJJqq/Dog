@@ -374,29 +374,42 @@ def _run_matches_slot(run, slot, task_id):
 
 
 def slot_recovery(runs, state, now):
+    """Keep every due slot pending until its scan has a confirmed successful run."""
     pending_dispatches = []
+    # Register today's and yesterday's due slots; older pending slots remain in state.
     for day in (now.date(), now.date() - timedelta(days=1)):
         for value in SLOTS:
             hour, minute = map(int, value.split(":"))
             slot = datetime(day.year, day.month, day.day, hour, minute, tzinfo=TZ)
-            elapsed = (now - slot).total_seconds()
-            if elapsed < LIMIT_SECONDS or elapsed > 24 * 3600:
-                continue
-            key = _slot_key(slot)
-            task_id = _task_id(slot)
-            matching = next((r for r in runs if _run_matches_slot(r, slot, task_id)), None)
-            record = state["slots"].setdefault(key, {})
-            if matching:
+            if (now - slot).total_seconds() >= LIMIT_SECONDS:
+                state["slots"].setdefault(_slot_key(slot), {"task_id": _task_id(slot)})
+
+    for key, record in list(state["slots"].items()):
+        try:
+            slot = datetime.strptime(key, "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
+        except ValueError:
+            continue
+        if (now - slot).total_seconds() < LIMIT_SECONDS:
+            continue
+        task_id = record.get("task_id") or _task_id(slot)
+        if record.get("status") == "completed_success":
+            continue
+        matching = next((r for r in runs if _run_matches_slot(r, slot, task_id)), None)
+        if matching:
+            if matching.get("status") == "completed" and matching.get("conclusion") == "success":
+                record.update({"status": "completed_success", "task_id": task_id,
+                               "run_id": matching["id"]})
+            else:
                 record.update({"status": "run_found", "task_id": task_id,
                                "run_id": matching["id"]})
-                continue
-            dispatched_at = record.get("dispatched_at")
-            if dispatched_at and (now - parse_time(dispatched_at)).total_seconds() < LIMIT_SECONDS:
-                continue
-            # Persist intent before dispatch so an unrecorded API action cannot duplicate.
-            record.update({"status": "dispatch_pending", "task_id": task_id,
-                           "dispatched_at": iso_now(now)})
-            pending_dispatches.append(task_id)
+            continue
+        dispatched_at = record.get("dispatched_at")
+        if dispatched_at and (now - parse_time(dispatched_at)).total_seconds() < LIMIT_SECONDS:
+            continue
+        # Persist intent before dispatch so an unrecorded API action cannot duplicate.
+        record.update({"status": "dispatch_pending", "task_id": task_id,
+                       "dispatched_at": iso_now(now)})
+        pending_dispatches.append(task_id)
     return pending_dispatches
 
 def prune_state(state, runs, now):
@@ -416,7 +429,8 @@ def prune_state(state, runs, now):
     for key, value in state["slots"].items():
         try:
             slot_time = datetime.strptime(key, "%Y-%m-%d %H:%M").replace(tzinfo=TZ)
-            if (now - slot_time).total_seconds() <= 48 * 3600:
+            age = (now - slot_time).total_seconds()
+            if value.get("status") != "completed_success" or age <= 48 * 3600:
                 kept_slots[key] = value
         except ValueError:
             continue
