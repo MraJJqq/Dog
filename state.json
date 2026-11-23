@@ -40,8 +40,10 @@
     },
     "45172724043": {
       "attempt": 4,
-      "status": "running",
-      "conclusion": "cancelled"
+      "status": "retry_requested",
+      "conclusion": "failure",
+      "retry_requested_attempt": 4,
+      "retry_requested_at": "2026-11-23T12:23:18.849924+00:00"
     },
     "45172720710": {
       "attempt": 2,
