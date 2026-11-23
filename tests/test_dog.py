@@ -70,6 +70,14 @@ class DogMonitorTests(unittest.TestCase):
         self.assertTrue(dog._run_matches_slot(next_slot,second,dog._task_id(second)))
         self.assertFalse(dog._run_matches_slot(next_slot,first,dog._task_id(first)))
 
+    def test_non_success_run_search_splits_past_api_limit(self):
+        from datetime import date
+        first=[{"id":i} for i in range(1000)]
+        with patch("dog._list_runs",side_effect=[first,[{"id":"left"}],[{"id":"right"}]]) as search:
+            runs=dog._list_status_runs("failure",date(2026,1,1),date(2026,1,2))
+        self.assertEqual([r["id"] for r in runs],["left","right"])
+        self.assertEqual(search.call_count,3)
+
     def test_legacy_state_migrates_pending_slot(self):
         state=dog.normalize_state({"task_id":"auto:2026-11-23:16:02",
             "slot":"2026-11-23T16:02:00+08:00",
