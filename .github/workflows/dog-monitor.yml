@@ -8,8 +8,8 @@ on:
       - tests/test_dog.py
       - .github/workflows/dog-monitor.yml
   schedule:
-    # Run every six minutes; schedule is aligned with Bark slots.
-    - cron: "2-59/6 * * * *"
+    # Run the watchdog every six minutes.
+    - cron: "*/6 * * * *"
   workflow_dispatch:
 permissions:
   contents: read
