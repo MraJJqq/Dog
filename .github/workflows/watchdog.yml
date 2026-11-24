@@ -1,0 +1,106 @@
+name: watchdog
+# Vegas 看门狗：检查扫描仓库的计划扫描有没有成功执行，没有就自动补触发，并用 Bark 通知
+# 放到「看门狗仓库」的 .github/workflows/watchdog.yml
+# Secrets（看门狗仓库）：WATCH_PAT（只授权扫描仓库的 Actions 读写）、BARK_KEY
+on:
+  schedule:
+    # 每个扫描点(UTC 0/2/8/12/14 = 北京 8/10/16/20/22)之后的 :25 :55，以及下一小时的 :25 :55
+    - cron: "25,55 0,1,2,3,8,9,12,13,14,15 * * *"
+  workflow_dispatch:
+env:
+  SCAN_REPO: "MraJJqq/Vegasbark"
+  WORKFLOW: "vegas.yml"
+  REF: "main"
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 检查并补触发
+        env:
+          WATCH_PAT: ${{ secrets.WATCH_PAT }}
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, urllib.request, urllib.error
+          from datetime import datetime, timedelta, timezone
+
+          SLOTS_UTC = [0, 2, 8, 12, 14]      # 北京时间 8 10 16 20 22 点
+          SLOT_MIN = 5                       # 扫描定在每个整点后第5分钟
+          GRACE = timedelta(minutes=15)      # 宽限：GitHub 常有延迟
+          MAX_ATTEMPTS = 3                   # 同一个计划点最多补触发到第3次
+
+          repo, wf, ref = os.environ["SCAN_REPO"], os.environ["WORKFLOW"], os.environ["REF"]
+          tok, bark_key = os.environ["WATCH_PAT"], os.environ.get("BARK_KEY", "")
+          BARK = os.environ.get("BARK_SERVER", "https://api.day.app").rstrip("/")
+          GH = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}"
+
+
+          def call(method, url, body=None):
+              req = urllib.request.Request(
+                  url, method=method,
+                  data=json.dumps(body).encode() if body is not None else None,
+                  headers={"Authorization": f"Bearer {tok}",
+                           "Accept": "application/vnd.github+json",
+                           "Content-Type": "application/json",
+                           "X-GitHub-Api-Version": "2022-11-28"})
+              try:
+                  with urllib.request.urlopen(req, timeout=20) as r:
+                      raw = r.read()
+                      return r.status, (json.loads(raw) if raw else {})
+              except urllib.error.HTTPError as e:
+                  return e.code, {}
+              except Exception as e:
+                  print("请求失败:", e)
+                  return 0, {}
+
+
+          def bark(body):
+              print("BARK:", body)
+              if not bark_key:
+                  return
+              try:
+                  req = urllib.request.Request(
+                      f"{BARK}/push", method="POST",
+                      data=json.dumps({"device_key": bark_key, "title": "🐶 看门狗", "body": body,
+                                       "group": "Watchdog", "level": "timeSensitive"}).encode(),
+                      headers={"Content-Type": "application/json"})
+                  urllib.request.urlopen(req, timeout=15).read()
+              except Exception as e:
+                  print("Bark 失败:", e)
+
+
+          now = datetime.now(timezone.utc)
+          slots = [datetime(d.year, d.month, d.day, h, SLOT_MIN, tzinfo=timezone.utc)
+                   for d in ((now - timedelta(days=i)).date() for i in (0, 1))
+                   for h in SLOTS_UTC]
+          due = max(t for t in slots if t + GRACE <= now)
+          bj = (due + timedelta(hours=8)).strftime("%H:%M")
+
+          code, j = call("GET", f"{GH}/runs?per_page=20")
+          if code != 200:
+              bark(f"读不到扫描仓库的运行记录（HTTP {code}），请检查 WATCH_PAT 权限/是否过期、SCAN_REPO、WORKFLOW 名称")
+              sys.exit(1)
+
+          since = due - timedelta(minutes=2)
+          runs = [r for r in j.get("workflow_runs", [])
+                  if datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")) >= since]
+          active = [r for r in runs if r["status"] != "completed"]
+          ok = [r for r in runs if r["status"] == "completed" and r["conclusion"] == "success"]
+
+          if ok or active:
+              print(f"正常：{bj} 的扫描已{'成功' if ok else '在运行/排队'}")
+              sys.exit(0)
+
+          attempts = len(runs)               # 已有但都失败/取消的次数
+          if attempts >= MAX_ATTEMPTS:
+              bark(f"{bj} 的扫描已失败 {attempts} 次，看门狗不再自动补触发，请手动查看扫描仓库的日志")
+              sys.exit(1)
+
+          code, _ = call("POST", f"{GH}/dispatches", {"ref": ref})
+          if code == 204:
+              bark(f"{bj} 的扫描未成功执行，已自动补触发（第 {attempts + 1} 次）")
+          else:
+              bark(f"{bj} 的扫描未成功执行，补触发失败（HTTP {code}），请检查 WATCH_PAT 权限和 REF 分支名")
+              sys.exit(1)
+          PY
