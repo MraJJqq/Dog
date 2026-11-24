@@ -1,12 +1,14 @@
 name: watchdog
-# Vegas 看门狗：检查扫描仓库的计划扫描有没有成功执行，没有就自动补触发，并用 Bark 通知
-# 放到「看门狗仓库」的 .github/workflows/watchdog.yml
-# Secrets（看门狗仓库）：WATCH_PAT（只授权扫描仓库的 Actions 读写）、BARK_KEY
+# Dog：每10分钟检查 Bark 自动扫描，并记录手动扫描结果
 on:
   schedule:
-    # 每10分钟检查一次
     - cron: "*/10 * * * *"
   workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: dog-watchdog
+  cancel-in-progress: false
 env:
   SCAN_REPO: "MraJJqq/Vegasbark"
   WORKFLOW: "vegas.yml"
@@ -16,7 +18,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: 检查并补触发
+      - uses: actions/checkout@v4
+      - name: 检查、补触发与通知
         env:
           WATCH_PAT: ${{ secrets.WATCH_PAT }}
           BARK_KEY: ${{ secrets.BARK_KEY }}
@@ -24,83 +27,165 @@ jobs:
           python3 - <<'PY'
           import json, os, sys, urllib.request, urllib.error
           from datetime import datetime, timedelta, timezone
+          from pathlib import Path
 
-          SLOTS_UTC = [0, 2, 8, 12, 14]      # 北京时间 8 10 16 20 22 点
-          SLOT_MIN = 5                       # 扫描定在每个整点后第5分钟
-          GRACE = timedelta(minutes=15)      # 宽限：GitHub 常有延迟
-          MAX_ATTEMPTS = 3                   # 同一个计划点最多补触发到第3次
+          SLOTS_UTC = [0, 2, 8, 12, 14]
+          SLOT_MIN = 5
+          GRACE = timedelta(minutes=15)
+          RETRY_WAIT = timedelta(minutes=20)
+          STATE_FILE = Path("dog-state.json")
 
-          repo, wf, ref = os.environ["SCAN_REPO"], os.environ["WORKFLOW"], os.environ["REF"]
-          tok, bark_key = os.environ["WATCH_PAT"], os.environ.get("BARK_KEY", "")
-          BARK = os.environ.get("BARK_SERVER", "https://api.day.app").rstrip("/")
-          GH = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}"
+          repo = os.environ["SCAN_REPO"]
+          wf = os.environ["WORKFLOW"]
+          ref = os.environ["REF"]
+          token = os.environ.get("WATCH_PAT", "")
+          bark_key = os.environ.get("BARK_KEY", "")
+          bark_server = os.environ.get("BARK_SERVER", "https://api.day.app").rstrip("/")
+          workflow_api = f"https://api.github.com/repos/{repo}/actions/workflows/{wf}"
 
-
-          def call(method, url, body=None):
+          def gh(method, url, body=None):
+              headers = {
+                  "Authorization": f"Bearer {token}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              }
               req = urllib.request.Request(
-                  url, method=method,
-                  data=json.dumps(body).encode() if body is not None else None,
-                  headers={"Authorization": f"Bearer {tok}",
-                           "Accept": "application/vnd.github+json",
-                           "Content-Type": "application/json",
-                           "X-GitHub-Api-Version": "2022-11-28"})
+                  url, method=method, data=json.dumps(body).encode() if body is not None else None,
+                  headers=headers)
               try:
-                  with urllib.request.urlopen(req, timeout=20) as r:
-                      raw = r.read()
-                      return r.status, (json.loads(raw) if raw else {})
-              except urllib.error.HTTPError as e:
-                  return e.code, {}
-              except Exception as e:
-                  print("请求失败:", e)
+                  with urllib.request.urlopen(req, timeout=20) as response:
+                      raw = response.read()
+                      return response.status, json.loads(raw) if raw else {}
+              except urllib.error.HTTPError as error:
+                  return error.code, {}
+              except Exception as error:
+                  print("GitHub API error:", error)
                   return 0, {}
 
-
-          def bark(body):
-              print("BARK:", body)
+          def bark(message):
+              print("BARK:", message)
               if not bark_key:
-                  return
+                  print("缺少 BARK_KEY")
+                  return False
+              payload = {
+                  "device_key": bark_key,
+                  "title": "🐶 看门狗",
+                  "body": message,
+                  "group": "Watchdog",
+                  "level": "timeSensitive",
+              }
+              req = urllib.request.Request(
+                  f"{bark_server}/push", method="POST",
+                  data=json.dumps(payload).encode(),
+                  headers={"Content-Type": "application/json"})
               try:
-                  req = urllib.request.Request(
-                      f"{BARK}/push", method="POST",
-                      data=json.dumps({"device_key": bark_key, "title": "🐶 看门狗", "body": body,
-                                       "group": "Watchdog", "level": "timeSensitive"}).encode(),
-                      headers={"Content-Type": "application/json"})
-                  urllib.request.urlopen(req, timeout=15).read()
-              except Exception as e:
-                  print("Bark 失败:", e)
+                  with urllib.request.urlopen(req, timeout=15) as response:
+                      result = json.loads(response.read() or b"{}")
+                      return response.status == 200 and result.get("code") == 200
+              except Exception as error:
+                  print("Bark notification failed:", error)
+                  return False
 
+          def parse_time(value):
+              return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
+          if not token:
+              bark("Dog 缺少 WATCH_PAT，无法读取或补触发 Bark 工作流")
+              sys.exit(1)
+
+          state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
+          completed = set(state.get("completed_slots", []))
+          last_dispatch = state.get("last_dispatch", {})
+          last_manual_id = int(state.get("last_manual_run_id", 0))
           now = datetime.now(timezone.utc)
-          slots = [datetime(d.year, d.month, d.day, h, SLOT_MIN, tzinfo=timezone.utc)
-                   for d in ((now - timedelta(days=i)).date() for i in (0, 1))
-                   for h in SLOTS_UTC]
-          due = max(t for t in slots if t + GRACE <= now)
-          bj = (due + timedelta(hours=8)).strftime("%H:%M")
 
-          code, j = call("GET", f"{GH}/runs?per_page=20")
+          code, data = gh("GET", f"{workflow_api}/runs?per_page=100")
           if code != 200:
-              bark(f"读不到扫描仓库的运行记录（HTTP {code}），请检查 WATCH_PAT 权限/是否过期、SCAN_REPO、WORKFLOW 名称")
+              bark(f"读取 Bark 工作流失败（HTTP {code}），检查 WATCH_PAT 权限、仓库和工作流路径")
               sys.exit(1)
 
-          since = due - timedelta(minutes=2)
-          runs = [r for r in j.get("workflow_runs", [])
-                  if datetime.fromisoformat(r["created_at"].replace("Z", "+00:00")) >= since]
-          active = [r for r in runs if r["status"] != "completed"]
-          ok = [r for r in runs if r["status"] == "completed" and r["conclusion"] == "success"]
+          runs = data.get("workflow_runs", [])
+          slots = []
+          for day_offset in (0, 1):
+              day = (now - timedelta(days=day_offset)).date()
+              for hour in SLOTS_UTC:
+                  slot = datetime(day.year, day.month, day.day, hour, SLOT_MIN, tzinfo=timezone.utc)
+                  if slot + GRACE <= now and slot >= now - timedelta(hours=36):
+                      slots.append(slot)
 
-          if ok or active:
-              print(f"正常：{bj} 的扫描已{'成功' if ok else '在运行/排队'}")
-              sys.exit(0)
+          for slot in sorted(slots):
+              slot_key = slot.strftime("%Y-%m-%dT%H:%M:%SZ")
+              if slot_key in completed:
+                  continue
 
-          attempts = len(runs)               # 已有但都失败/取消的次数
-          if attempts >= MAX_ATTEMPTS:
-              bark(f"{bj} 的扫描已失败 {attempts} 次，看门狗不再自动补触发，请手动查看扫描仓库的日志")
-              sys.exit(1)
+              slot_end = slot + timedelta(minutes=30)
+              scheduled = [
+                  run for run in runs
+                  if run.get("event") == "schedule"
+                  and slot - timedelta(minutes=2) <= parse_time(run["created_at"]) < slot_end
+              ]
+              recovery = [
+                  run for run in runs
+                  if run.get("event") == "workflow_dispatch"
+                  and slot_key in (run.get("display_title") or run.get("name") or "")
+                  and "watchdog-recovery" in (run.get("display_title") or run.get("name") or "")
+              ]
+              relevant = scheduled + recovery
+              if any(r.get("status") == "completed" and r.get("conclusion") == "success" for r in relevant):
+                  completed.add(slot_key)
+                  last_dispatch.pop(slot_key, None)
+                  print("扫描成功：", slot_key)
+                  continue
+              if any(r.get("status") != "completed" for r in relevant):
+                  print("扫描仍在运行：", slot_key)
+                  continue
 
-          code, _ = call("POST", f"{GH}/dispatches", {"ref": ref})
-          if code == 204:
-              bark(f"{bj} 的扫描未成功执行，已自动补触发（第 {attempts + 1} 次）")
-          else:
-              bark(f"{bj} 的扫描未成功执行，补触发失败（HTTP {code}），请检查 WATCH_PAT 权限和 REF 分支名")
-              sys.exit(1)
+              previous = last_dispatch.get(slot_key)
+              if previous and now - parse_time(previous) < RETRY_WAIT and not recovery:
+                  print("等待 GitHub 创建补触发运行记录：", slot_key)
+                  continue
+
+              attempt = len(recovery) + 1
+              code, _ = gh("POST", f"{workflow_api}/dispatches", {
+                  "ref": ref,
+                  "inputs": {"watchdog_slot": slot_key},
+              })
+              if code == 204:
+                  last_dispatch[slot_key] = now.isoformat()
+                  bark(f"{slot_key}（北京时间 {(slot + timedelta(hours=8)).strftime('%H:%M')}）扫描未成功，Dog 已补触发，第 {attempt} 次")
+              else:
+                  bark(f"{slot_key} 扫描补触发失败（HTTP {code}），检查 WATCH_PAT 的 Actions 写权限和分支")
+                  sys.exit(1)
+
+          # 手动扫描只监控结果，不自动重跑；Dog 自己发起的恢复任务不算手动扫描。
+          manual_runs = [
+              r for r in runs
+              if r.get("event") == "workflow_dispatch"
+              and "watchdog-recovery" not in (r.get("display_title") or r.get("name") or "")
+              and int(r.get("id", 0)) > last_manual_id
+          ]
+          for run in sorted(manual_runs, key=lambda r: int(r.get("id", 0))):
+              if run.get("status") != "completed":
+                  continue
+              run_id = int(run["id"])
+              last_manual_id = max(last_manual_id, run_id)
+              if run.get("conclusion") != "success":
+                  bark(f"手动扫描失败：运行编号 {run_id}，请查看 Vegasbark Actions 日志")
+              else:
+                  print("手动扫描成功：", run_id)
+
+          state["completed_slots"] = sorted(completed)[-30:]
+          state["last_dispatch"] = last_dispatch
+          state["last_manual_run_id"] = last_manual_id
+          state["checked_at"] = now.isoformat()
+          STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2))
+          print("Dog 检查完成")
           PY
+      - name: 保存看门狗状态
+        if: always()
+        run: |
+          git config user.name "dog-bot"
+          git config user.email "dog-bot@users.noreply.github.com"
+          git add dog-state.json
+          git diff --cached --quiet || (git commit -m "Dog: persist watchdog state [skip ci]" && git pull --rebase && git push)
