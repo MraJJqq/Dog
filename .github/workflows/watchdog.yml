@@ -4,8 +4,8 @@ name: watchdog
 # Secrets（看门狗仓库）：WATCH_PAT（只授权扫描仓库的 Actions 读写）、BARK_KEY
 on:
   schedule:
-    # 每个扫描点(UTC 0/2/8/12/14 = 北京 8/10/16/20/22)之后的 :25 :55，以及下一小时的 :25 :55
-    - cron: "25,55 0,1,2,3,8,9,12,13,14,15 * * *"
+    # 每10分钟检查一次
+    - cron: "*/10 * * * *"
   workflow_dispatch:
 env:
   SCAN_REPO: "MraJJqq/Vegasbark"
