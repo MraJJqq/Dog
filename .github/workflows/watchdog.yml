@@ -97,7 +97,7 @@ jobs:
           state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
           completed = set(state.get("completed_slots", []))
           last_dispatch = state.get("last_dispatch", {})
-          last_manual_id = int(state.get("last_manual_run_id", 0))
+          manual_seen = set(str(x) for x in state.get("manual_seen_runs", []))
           now = datetime.now(timezone.utc)
 
           code, data = gh("GET", f"{workflow_api}/runs?per_page=100")
@@ -163,21 +163,25 @@ jobs:
               r for r in runs
               if r.get("event") == "workflow_dispatch"
               and "watchdog-recovery" not in (r.get("display_title") or r.get("name") or "")
-              and int(r.get("id", 0)) > last_manual_id
           ]
           for run in sorted(manual_runs, key=lambda r: int(r.get("id", 0))):
               if run.get("status") != "completed":
                   continue
               run_id = int(run["id"])
-              last_manual_id = max(last_manual_id, run_id)
+              run_key = str(run_id)
+              if run_key in manual_seen:
+                  continue
               if run.get("conclusion") != "success":
-                  bark(f"手动扫描失败：运行编号 {run_id}，请查看 Vegasbark Actions 日志")
+                  if not bark(f"手动扫描失败：运行编号 {run_id}，请查看 Vegasbark Actions 日志"):
+                      print("手动扫描失败通知未送达，保留该运行供下次重试")
+                      continue
               else:
                   print("手动扫描成功：", run_id)
+              manual_seen.add(run_key)
 
           state["completed_slots"] = sorted(completed)[-30:]
           state["last_dispatch"] = last_dispatch
-          state["last_manual_run_id"] = last_manual_id
+          state["manual_seen_runs"] = sorted(manual_seen, key=int)[-200:]
           state["checked_at"] = now.isoformat()
           STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2))
           print("Dog 检查完成")
