@@ -32,7 +32,6 @@ jobs:
           SLOTS_UTC = [0, 2, 8, 12, 14]
           SLOT_MIN = 5
           GRACE = timedelta(minutes=15)
-          RETRY_WAIT = timedelta(minutes=20)
           STATE_FILE = Path("dog-state.json")
 
           repo = os.environ["SCAN_REPO"]
@@ -137,13 +136,25 @@ jobs:
                   last_dispatch.pop(slot_key, None)
                   print("扫描成功：", slot_key)
                   continue
-              if any(r.get("status") != "completed" for r in relevant):
-                  print("扫描仍在运行：", slot_key)
-                  continue
+              active_runs = [r for r in relevant if r.get("status") != "completed"]
+              still_running = []
+              for run in active_runs:
+                  age = now - parse_time(run["created_at"])
+                  if age <= timedelta(minutes=6):
+                      still_running.append(run)
+                      continue
+                  run_id = int(run["id"])
+                  cancel_code, _ = gh(
+                      "POST",
+                      f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/cancel"
+                  )
+                  if cancel_code not in (202, 409):
+                      bark(f"任务超时且取消失败：运行编号 {run_id}，HTTP {cancel_code}")
+                      sys.exit(1)
+                  print("已取消超时任务：", run_id)
 
-              previous = last_dispatch.get(slot_key)
-              if previous and now - parse_time(previous) < RETRY_WAIT and not recovery:
-                  print("等待 GitHub 创建补触发运行记录：", slot_key)
+              if still_running:
+                  print("扫描仍在6分钟时限内运行：", slot_key)
                   continue
 
               attempt = len(recovery) + 1
@@ -157,27 +168,6 @@ jobs:
               else:
                   bark(f"{slot_key} 扫描补触发失败（HTTP {code}），检查 WATCH_PAT 的 Actions 写权限和分支")
                   sys.exit(1)
-
-          # 手动扫描只监控结果，不自动重跑；Dog 自己发起的恢复任务不算手动扫描。
-          manual_runs = [
-              r for r in runs
-              if r.get("event") == "workflow_dispatch"
-              and "watchdog-recovery" not in (r.get("display_title") or r.get("name") or "")
-          ]
-          for run in sorted(manual_runs, key=lambda r: int(r.get("id", 0))):
-              if run.get("status") != "completed":
-                  continue
-              run_id = int(run["id"])
-              run_key = str(run_id)
-              if run_key in manual_seen:
-                  continue
-              if run.get("conclusion") != "success":
-                  if not bark(f"手动扫描失败：运行编号 {run_id}，请查看 Vegasbark Actions 日志"):
-                      print("手动扫描失败通知未送达，保留该运行供下次重试")
-                      continue
-              else:
-                  print("手动扫描成功：", run_id)
-              manual_seen.add(run_key)
 
           state["completed_slots"] = sorted(completed)[-30:]
           state["last_dispatch"] = last_dispatch
