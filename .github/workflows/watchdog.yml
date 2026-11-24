@@ -136,24 +136,8 @@ jobs:
                   print("扫描成功：", slot_key)
                   continue
               active_runs = [r for r in relevant if r.get("status") != "completed"]
-              still_running = []
-              for run in active_runs:
-                  age = now - parse_time(run["created_at"])
-                  if age <= timedelta(minutes=6):
-                      still_running.append(run)
-                      continue
-                  run_id = int(run["id"])
-                  cancel_code, _ = gh(
-                      "POST",
-                      f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/cancel"
-                  )
-                  if cancel_code not in (202, 409):
-                      bark(f"任务超时且取消失败：运行编号 {run_id}，HTTP {cancel_code}")
-                      sys.exit(1)
-                  print("已取消超时任务：", run_id)
-
-              if still_running:
-                  print("扫描仍在6分钟时限内运行：", slot_key)
+              if active_runs:
+                  print("Bark 扫描仍在运行，不取消任务：", slot_key)
                   continue
 
               attempt = len(recovery) + 1
