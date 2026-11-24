@@ -8,7 +8,7 @@ on:
     - cron: "25,55 0,1,2,3,8,9,12,13,14,15 * * *"
   workflow_dispatch:
 env:
-  SCAN_REPO: "MraJJqq/Vegasbark"
+  SCAN_REPO: "你的用户名/扫描仓库名"
   WORKFLOW: "vegas.yml"
   REF: "main"
 jobs:
