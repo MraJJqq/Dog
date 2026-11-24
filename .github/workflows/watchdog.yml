@@ -96,7 +96,6 @@ jobs:
           state = json.loads(STATE_FILE.read_text()) if STATE_FILE.exists() else {}
           completed = set(state.get("completed_slots", []))
           last_dispatch = state.get("last_dispatch", {})
-          manual_seen = set(str(x) for x in state.get("manual_seen_runs", []))
           now = datetime.now(timezone.utc)
 
           code, data = gh("GET", f"{workflow_api}/runs?per_page=100")
@@ -171,7 +170,6 @@ jobs:
 
           state["completed_slots"] = sorted(completed)[-30:]
           state["last_dispatch"] = last_dispatch
-          state["manual_seen_runs"] = sorted(manual_seen, key=int)[-200:]
           state["checked_at"] = now.isoformat()
           STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2))
           print("Dog 检查完成")
